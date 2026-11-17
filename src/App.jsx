@@ -381,10 +381,7 @@ export default function App() {
         start = null
         return
       }
-      if (event.target.closest('button, a, input, select, textarea')) {
-        start = null
-        return
-      }
+      // 触摸场景允许从任意位置起手（含按钮），仅以横向位移阈值判定切换
       const touch = event.touches[0]
       start = { x: touch.clientX, y: touch.clientY, t: Date.now() }
     }
