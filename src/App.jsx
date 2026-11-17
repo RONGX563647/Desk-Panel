@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePanel } from './usePanel.js'
-import { Clock, Cpu, Disk, Gpu, Media, Memory, Network, Shortcuts } from './widgets.jsx'
+import { Clock, Cpu, Disk, Gpu, Latency, Media, Memory, Network, Processes, Shortcuts, System, Temp } from './widgets.jsx'
 import InstallHint from './InstallHint.jsx'
 import { CloseIcon, FullscreenIcon, SunIcon, ThemeIcon } from './icons.jsx'
 import { formatClock, formatUptime, packRows, wrapPage } from './utils.js'
@@ -454,6 +454,22 @@ export default function App() {
         return <Disk key="disk" disk={metrics?.disk} disks={metrics?.disks} ready={ready} />
       case 'network':
         return <Network key="network" rx={metrics?.rx} tx={metrics?.tx} ts={metrics?.ts} ready={ready} />
+      case 'temp':
+        return <Temp key="temp" cpuTemp={metrics?.temp} gpuTemp={metrics?.gpu?.temperature} ready={ready} />
+      case 'processes':
+        return <Processes key="processes" list={metrics?.processes} ready={ready} />
+      case 'latency':
+        return <Latency key="latency" value={metrics?.latency} ts={metrics?.ts} ready={ready} />
+      case 'system':
+        return (
+          <System
+            key="system"
+            info={info}
+            uptime={metrics?.uptime}
+            processCount={metrics?.processCount}
+            ready={ready}
+          />
+        )
       case 'media':
         return (
           <Media

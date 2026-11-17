@@ -22,8 +22,23 @@ test('reset 后重新建立采样基准', () => {
 test('采样帧包含前端所需字段', () => {
   const frame = createSampler().sample()
 
-  for (const key of ['ts', 'cpu', 'cores', 'memUsed', 'memTotal', 'disk', 'rx', 'tx', 'uptime']) {
+  for (const key of [
+    'ts',
+    'cpu',
+    'cores',
+    'memUsed',
+    'memTotal',
+    'disk',
+    'rx',
+    'tx',
+    'uptime',
+    'temp',
+    'processes',
+    'processCount',
+    'latency',
+  ]) {
     assert.ok(key in frame, `缺少字段 ${key}`)
   }
   assert.equal(typeof frame.ts, 'number')
+  assert.ok(Array.isArray(frame.processes))
 })

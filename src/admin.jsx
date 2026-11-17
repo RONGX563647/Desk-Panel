@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CodeIcon, FolderIcon, GlobeIcon, LockIcon, RefreshIcon, TerminalIcon } from './icons.jsx'
+import { packRows } from './utils.js'
 
 const ICON_OPTIONS = [
   { value: 'terminal', label: '终端', Icon: TerminalIcon },
@@ -21,21 +22,42 @@ const KIND_TARGET_HINT = {
   lock: '锁定当前会话（系统动作）',
 }
 
-const COMPONENTS = [
-  { id: 'clock', label: '时间' },
-  { id: 'cpu', label: 'CPU' },
-  { id: 'gpu', label: 'GPU' },
-  { id: 'memory', label: '内存' },
-  { id: 'disk', label: '磁盘' },
-  { id: 'network', label: '网络' },
-  { id: 'media', label: '媒体' },
-  { id: 'shortcuts', label: '快捷操作' },
+const COMPONENT_GROUPS = [
+  {
+    title: '资源监控',
+    items: [
+      { id: 'clock', label: '时间' },
+      { id: 'cpu', label: 'CPU' },
+      { id: 'gpu', label: 'GPU' },
+      { id: 'memory', label: '内存' },
+      { id: 'disk', label: '磁盘' },
+      { id: 'network', label: '网络' },
+      { id: 'temp', label: '温度' },
+      { id: 'processes', label: '进程' },
+      { id: 'latency', label: '延迟' },
+      { id: 'system', label: '系统' },
+    ],
+  },
+  {
+    title: '控制与其他',
+    items: [
+      { id: 'media', label: '媒体' },
+      { id: 'shortcuts', label: '快捷操作' },
+    ],
+  },
 ]
 
+const COMPONENT_LABELS = Object.fromEntries(
+  COMPONENT_GROUPS.flatMap((group) => group.items.map((item) => [item.id, item.label]))
+)
+
 const TEMPLATES = {
-  default: { label: '默认', components: ['clock', 'cpu', 'memory', 'disk', 'network', 'shortcuts'] },
-  monitor: { label: '监控', components: ['clock', 'cpu', 'gpu', 'memory', 'disk', 'network'] },
-  control: { label: '控制', components: ['clock', 'media', 'shortcuts', 'network'] },
+  default: { label: '默认', components: ['clock', 'cpu', 'memory', 'network', 'shortcuts'] },
+  monitor: {
+    label: '全监控',
+    components: ['clock', 'cpu', 'gpu', 'memory', 'disk', 'network', 'temp', 'system'],
+  },
+  control: { label: '控制', components: ['clock', 'media', 'shortcuts', 'network', 'latency'] },
   minimal: { label: '极简', components: ['clock', 'memory', 'network', 'shortcuts'] },
 }
 
@@ -60,6 +82,7 @@ export default function AdminPanel() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [tab, setTab] = useState('actions')
 
   useEffect(() => {
     let alive = true
@@ -89,6 +112,24 @@ export default function AdminPanel() {
     () => !!config && JSON.stringify(config) !== savedSnapshot,
     [config, savedSnapshot]
   )
+
+  // 有未保存修改时离开页面给出提示
+  useEffect(() => {
+    if (!dirty) return
+    const onBeforeUnload = (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
+
+  const discard = useCallback(() => {
+    if (!savedSnapshot) return
+    setConfig(JSON.parse(savedSnapshot))
+    setNotice('')
+    setError('')
+  }, [savedSnapshot])
 
   const updateAction = useCallback((index, patch) => {
     setConfig((prev) => {
@@ -172,6 +213,28 @@ export default function AdminPanel() {
     setNotice('')
   }, [])
 
+  const moveComponent = useCallback((pageIndex, componentId, delta) => {
+    setConfig((prev) => {
+      if (!prev?.layout) return prev
+      return {
+        ...prev,
+        layout: {
+          ...prev.layout,
+          pages: prev.layout.pages.map((page, index) => {
+            if (index !== pageIndex) return page
+            const components = [...page.components]
+            const from = components.indexOf(componentId)
+            const to = from + delta
+            if (from < 0 || to < 0 || to >= components.length) return page
+            ;[components[from], components[to]] = [components[to], components[from]]
+            return { ...page, components }
+          }),
+        },
+      }
+    })
+    setNotice('')
+  }, [])
+
   const movePage = useCallback((index, delta) => {
     setConfig((prev) => {
       if (!prev?.layout) return prev
@@ -246,19 +309,38 @@ export default function AdminPanel() {
     <div className="admin">
       <header className="admin-head">
         <div>
-          <div className="admin-title">动作设置</div>
-          <div className="admin-sub">仅本机可访问 · 保存后手机端立即生效</div>
+          <div className="admin-title">面板设置</div>
+          <div className="admin-sub">仅本机可访问 · 保存后设备立即生效</div>
         </div>
         <a className="ghost admin-back" href="/">
           返回面板
         </a>
       </header>
 
-      <main className="admin-body">
-        <p className="admin-note">
-          手机端只会收到动作 ID，命令与参数保存在本机 <code>data/config.json</code>，不会下发到局域网设备。
-        </p>
+      <nav className="admin-tabs" role="tablist" aria-label="设置分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'actions'}
+          className={tab === 'actions' ? 'active' : ''}
+          onClick={() => setTab('actions')}
+        >
+          快捷动作
+          <span className="admin-tab-count">{config?.actions.length || 0}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'layout'}
+          className={tab === 'layout' ? 'active' : ''}
+          onClick={() => setTab('layout')}
+        >
+          页面布局
+          <span className="admin-tab-count">{config?.layout?.pages.length || 0}</span>
+        </button>
+      </nav>
 
+      <main className="admin-body">
         {error ? (
           <div className="admin-alert" role="alert">
             <span>{error}</span>
@@ -272,9 +354,12 @@ export default function AdminPanel() {
         {loading ? (
           <div className="admin-empty">正在读取配置…</div>
         ) : config ? (
-          <>
-            <h2 className="admin-section-title">快捷动作</h2>
-            {config.actions.length ? (
+          tab === 'actions' ? (
+            <>
+              <p className="admin-note">
+                手机端只会收到动作 ID，命令与参数保存在本机 <code>data/config.json</code>，不会下发到局域网设备。
+              </p>
+              {config.actions.length ? (
               config.actions.map((action, index) => {
                 const Icon = ICON_OPTIONS.find((item) => item.value === action.icon)?.Icon || TerminalIcon
                 return (
@@ -390,11 +475,12 @@ export default function AdminPanel() {
                 新增网址动作
               </button>
             </div>
-
-            <h2 className="admin-section-title">页面布局</h2>
-            <p className="admin-note">
-              最多 {MAX_PAGES} 个页面，手机端可左右滑动或点击圆点切换；每个页面至少保留一个组件。
-            </p>
+            </>
+          ) : (
+            <>
+              <p className="admin-note">
+                最多 {MAX_PAGES} 个页面，设备端左右滑动循环切换；每个页面至少保留一个组件，卡片会按顺序自动铺满。
+              </p>
 
             {(config.layout?.pages || []).map((page, index) => {
               const pages = config.layout.pages
@@ -458,21 +544,65 @@ export default function AdminPanel() {
                     </div>
                   </div>
 
-                  <div className="admin-components">
-                    {COMPONENTS.map((item) => {
-                      const checked = page.components.includes(item.id)
-                      return (
-                        <label className="admin-check" key={item.id}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={checked && page.components.length === 1}
-                            onChange={() => toggleComponent(index, item.id)}
-                          />
-                          <span>{item.label}</span>
-                        </label>
-                      )
-                    })}
+                  <div className="admin-selected">
+                    {page.components.map((componentId, order) => (
+                      <span className="admin-chip" key={componentId}>
+                        {COMPONENT_LABELS[componentId] || componentId}
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          onClick={() => moveComponent(index, componentId, -1)}
+                          disabled={order === 0}
+                          aria-label={`前移 ${COMPONENT_LABELS[componentId] || componentId}`}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          onClick={() => moveComponent(index, componentId, 1)}
+                          disabled={order === page.components.length - 1}
+                          aria-label={`后移 ${COMPONENT_LABELS[componentId] || componentId}`}
+                        >
+                          ↓
+                        </button>
+                      </span>
+                    ))}
+                    <span className="admin-hint">顺序决定卡片位置</span>
+                  </div>
+
+                  {COMPONENT_GROUPS.map((group) => (
+                    <div className="admin-group" key={group.title}>
+                      <span className="admin-group-title">{group.title}</span>
+                      <div className="admin-components">
+                        {group.items.map((item) => {
+                          const checked = page.components.includes(item.id)
+                          return (
+                            <label className="admin-check" key={item.id}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={checked && page.components.length === 1}
+                                onChange={() => toggleComponent(index, item.id)}
+                              />
+                              <span>{item.label}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="layout-preview" aria-hidden="true">
+                    {packRows(page.components).map((row, rowIndex) => (
+                      <div className="layout-preview-row" key={rowIndex}>
+                        {row.map(({ id, span }) => (
+                          <span className="layout-preview-cell" key={id} style={{ flexGrow: span }}>
+                            {COMPONENT_LABELS[id] || id}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
                   </div>
                 </section>
               )
@@ -491,17 +621,25 @@ export default function AdminPanel() {
                 已有 {config.layout?.pages.length || 0} / {MAX_PAGES} 个页面
               </span>
             </div>
-
-            <div className="admin-footer admin-savebar">
-              {dirty ? <span className="admin-dirty">有未保存的修改</span> : null}
-              {notice ? <span className="admin-notice">{notice}</span> : null}
-              <button type="button" className="btn primary" onClick={save} disabled={saving || !dirty}>
-                {saving ? '保存中…' : '保存配置'}
-              </button>
-            </div>
-          </>
+            </>
+          )
         ) : null}
       </main>
+
+      <footer className="admin-savebar">
+        <div className="admin-savebar-inner">
+          <span className={dirty ? 'admin-dirty' : 'admin-hint'}>
+            {dirty ? '有未保存的修改' : '配置已保存'}
+          </span>
+          {notice ? <span className="admin-notice">{notice}</span> : null}
+          <button type="button" className="btn ghost" onClick={discard} disabled={!dirty || saving}>
+            放弃修改
+          </button>
+          <button type="button" className="btn primary" onClick={save} disabled={saving || !dirty}>
+            {saving ? '保存中…' : '保存配置'}
+          </button>
+        </div>
+      </footer>
     </div>
   )
 }

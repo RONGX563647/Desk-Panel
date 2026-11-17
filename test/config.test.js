@@ -111,6 +111,20 @@ test('严格保存时校验页面布局', () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+test('新增资源卡片可在布局中使用', () => {
+  const { dir, file } = tempFile()
+  const saved = saveConfig(file, {
+    version: 2,
+    actions: [],
+    layout: {
+      pages: [{ name: '监控', components: ['system', 'temp', 'processes', 'latency'] }],
+    },
+  })
+
+  assert.deepEqual(saved.layout.pages[0].components, ['system', 'temp', 'processes', 'latency'])
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('布局页面数量限制为 5 个', () => {
   const { dir, file } = tempFile()
   const page = { name: '页', components: ['clock'] }

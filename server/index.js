@@ -44,12 +44,25 @@ function isLocalRequest(req) {
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
 }
 
+function lanAddress() {
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const item of addrs || []) {
+      if (item.family === 'IPv4' && !item.internal && !item.address.startsWith('169.254')) {
+        return item.address
+      }
+    }
+  }
+  return ''
+}
+
 const info = {
   host: os.hostname(),
   cpu: (os.cpus()[0]?.model || 'CPU').trim(),
   cores: os.cpus().length,
   memTotal: os.totalmem(),
   platform: `${os.type()} ${os.release()}`,
+  arch: os.arch(),
+  ip: lanAddress(),
 }
 
 app.get('/api/info', (req, res) => {
@@ -192,6 +205,18 @@ function setupConnection(ws, req) {
       sampler.startNetworkPolling()
       sampler.startHardwarePolling()
       mediaWatcher.start()
+      // 首次硬件与网络采样较慢，分两次补发，避免新卡片等待下一个推送周期
+      for (const delay of [5000, 12000]) {
+        setTimeout(() => {
+          if (clients.size === 0) return
+          try {
+            latest = sampler.sample()
+            broadcast({ t: 'metrics', ...latest, media: mediaWatcher.getState() })
+          } catch (err) {
+            logger.warn(`补充采样失败：${err.message}`)
+          }
+        }, delay)
+      }
     }, 800)
   }
   ws.on('close', () => {

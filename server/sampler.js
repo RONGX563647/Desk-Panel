@@ -21,15 +21,18 @@ function runPowerShell(script, timeout = 8000) {
 }
 
 // CPU / 内存走 Node 原生接口，1 分钟一次近乎零开销；
-// WMI 类接口在这类机器上单次可能耗时数十秒，因此只用轻量的 statfs、nvidia-smi 和网络计数器。
+// WMI 类接口在这类机器上单次可能耗时数十秒，因此只用轻量的 statfs、nvidia-smi、ACPI 温度和网络计数器。
 export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 60000 } = {}) {
   let prevCpu = null
   let netPrev = null
   let netRate = { rx: 0, tx: 0 }
+  let latency = null
   let diskCache = { mount: 'C:', used: 0, size: 0 }
   let diskList = null
   let diskAt = 0
-  let hardware = { gpu: null, temp: null, processCount: null }
+  let hardware = { gpu: null, temp: null, processCount: null, processes: [] }
+  let hardwareBusy = false
+  let networkBusy = false
   let netTimer = null
   let hardwareTimer = null
 
@@ -164,15 +167,80 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
     })
   }
 
+  // ACPI 热区温度，单位是 0.1K，单次约 0.3s，可安全放进 60s 轮询
+  async function refreshCpuTemp() {
+    const output = await runPowerShell(
+      '(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Measure-Object -Property CurrentTemperature -Maximum).Maximum',
+      8000
+    )
+    const raw = toNumber(output.trim())
+    if (raw == null || raw <= 0) {
+      hardware.temp = null
+      return
+    }
+    const celsius = raw / 10 - 273.15
+    hardware.temp = celsius > -20 && celsius < 150 ? Math.round(celsius * 10) / 10 : null
+  }
+
+  async function refreshProcesses() {
+    const output = await runPowerShell(
+      `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $all = Get-Process; @{ count = $all.Count; top = @($all | Sort-Object WorkingSet64 -Descending | Select-Object -First 3 ProcessName,WorkingSet64,CPU) } | ConvertTo-Json -Compress -Depth 3`,
+      10000
+    )
+    if (!output.trim()) return
+    try {
+      const data = JSON.parse(output)
+      const rawList = Array.isArray(data?.top) ? data.top : data?.top ? [data.top] : []
+      const list = rawList
+        .map((item) => ({
+          name: typeof item?.ProcessName === 'string' ? item.ProcessName : '',
+          mem: toNumber(item?.WorkingSet64) ?? 0,
+          cpu: toNumber(item?.CPU) ?? 0,
+        }))
+        .filter((item) => item.name && item.mem > 0)
+      hardware.processes = list
+      const count = toNumber(data?.count)
+      if (count != null) hardware.processCount = Math.round(count)
+    } catch {
+      /* 输出不是合法 JSON 时忽略本次刷新 */
+    }
+  }
+
+  async function refreshLatency() {
+    const output = await runPowerShell(
+      '$r = Test-Connection -ComputerName 223.5.5.5 -Count 1 -ErrorAction SilentlyContinue; if ($r) { $r.ResponseTime }',
+      6000
+    )
+    const text = output.trim().split(/\r?\n/)[0] || ''
+    const ms = toNumber(text)
+    latency = ms != null && ms >= 0 ? Math.round(ms) : null
+  }
+
+  // 硬件采集可能偶发变慢，用忙碌标记避免轮询堆叠出大量 PowerShell 进程
   async function refreshHardware() {
-    await Promise.all([refreshDisks(), refreshGpu()])
+    if (hardwareBusy) return
+    hardwareBusy = true
+    try {
+      await Promise.all([refreshDisks(), refreshGpu(), refreshCpuTemp(), refreshProcesses()])
+    } finally {
+      hardwareBusy = false
+    }
   }
 
   function startNetworkPolling() {
     if (netTimer) return
     netPrev = null
-    refreshNetwork()
-    netTimer = setInterval(refreshNetwork, networkIntervalMs)
+    const tick = async () => {
+      if (networkBusy) return
+      networkBusy = true
+      try {
+        await Promise.all([refreshNetwork(), refreshLatency()])
+      } finally {
+        networkBusy = false
+      }
+    }
+    tick()
+    netTimer = setInterval(tick, networkIntervalMs)
   }
 
   function stopNetworkPolling() {
@@ -180,6 +248,7 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
     netTimer = null
     netPrev = null
     netRate = { rx: 0, tx: 0 }
+    latency = null
   }
 
   function startHardwarePolling() {
@@ -213,8 +282,10 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
       gpu: hardware.gpu,
       temp: hardware.temp,
       processCount: hardware.processCount,
+      processes: hardware.processes,
       rx: netRate.rx,
       tx: netRate.tx,
+      latency,
       uptime: os.uptime(),
     }
   }

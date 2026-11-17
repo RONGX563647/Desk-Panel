@@ -13,7 +13,7 @@ import {
   VolumeDownIcon,
   VolumeUpIcon,
 } from './icons.jsx'
-import { WEEK, formatRate, levelOf, pad2, toGB } from './utils.js'
+import { WEEK, formatRate, formatUptime, levelOf, pad2, toGB } from './utils.js'
 
 function Tile({ area, label, meta, className = '', children }) {
   return (
@@ -312,8 +312,158 @@ export const Network = memo(function Network({ rx, tx, ts, ready }) {
   )
 })
 
-const MEDIA_STATUS = {
-  playing: '播放中',
+const tempLevel = (value) => (value >= 85 ? 'danger' : value >= 70 ? 'warn' : 'ok')
+
+export const Temp = memo(function Temp({ cpuTemp, gpuTemp, ready }) {
+  const entries = [
+    { key: 'cpu', label: 'CPU', value: Number.isFinite(cpuTemp) ? cpuTemp : null },
+    { key: 'gpu', label: 'GPU', value: Number.isFinite(gpuTemp) ? gpuTemp : null },
+  ]
+  const known = entries.filter((item) => item.value != null)
+
+  return (
+    <Tile area="temp" label="温度" meta={ready ? (known.length ? '实时' : '不可用') : '采样中'}>
+      {!ready ? (
+        <MetricSkeleton />
+      ) : !known.length ? (
+        <div className="keys-empty">当前设备未提供温度传感器</div>
+      ) : (
+        <div className="temp-list">
+          {entries.map(({ key, label, value }) => (
+            <div className="temp-item" key={key}>
+              <div className="temp-head">
+                <span className="temp-name">{label}</span>
+                <span className={`temp-value ${value == null ? 'muted' : tempLevel(value)}`}>
+                  {value == null ? '--' : `${Math.round(value)}°C`}
+                </span>
+              </div>
+              <div className={`bar ${value == null ? '' : tempLevel(value)}`}>
+                <span style={{ width: `${value == null ? 0 : Math.min(100, Math.max(3, value))}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Tile>
+  )
+})
+
+function formatCpuTime(seconds) {
+  if (!Number.isFinite(seconds)) return '--'
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)} 小时`
+  if (seconds >= 60) return `${Math.round(seconds / 60)} 分`
+  return `${Math.round(seconds)} 秒`
+}
+
+export const Processes = memo(function Processes({ list, ready }) {
+  const items = Array.isArray(list) ? list.slice(0, 3) : []
+
+  return (
+    <Tile area="proc" label="进程" meta={ready ? (items.length ? '内存前三' : '不可用') : '采样中'}>
+      {!ready ? (
+        <MetricSkeleton />
+      ) : items.length ? (
+        <div className="proc-list">
+          {items.map((item, index) => (
+            <div className="proc-row" key={`${item.name}-${index}`}>
+              <span className="proc-rank">{index + 1}</span>
+              <span className="proc-name ellipsis" title={item.name}>
+                {item.name}
+              </span>
+              <span className="proc-mem">{toGB(item.mem) != null ? `${toGB(item.mem).toFixed(2)} GB` : '--'}</span>
+              <span className="proc-cpu">{formatCpuTime(item.cpu)}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="keys-empty">进程信息不可用</div>
+      )}
+    </Tile>
+  )
+})
+
+export const Latency = memo(function Latency({ value, ts, ready }) {
+  const [history, setHistory] = useState(() => Array(24).fill(null))
+  const lastTs = useRef(0)
+
+  useEffect(() => {
+    if (!ready || !ts || ts === lastTs.current) return
+    lastTs.current = ts
+    setHistory((prev) => [...prev.slice(1), Number.isFinite(value) ? value : null])
+  }, [ready, ts, value])
+
+  const online = Number.isFinite(value)
+  const quality = !online ? '超时' : value < 40 ? '优秀' : value < 80 ? '良好' : value < 150 ? '一般' : '较慢'
+  const tone = !online ? 'danger' : value < 60 ? 'ok' : value < 120 ? 'warn' : 'danger'
+  const max = useMemo(() => Math.max(120, ...history.filter((item) => Number.isFinite(item))), [history])
+
+  return (
+    <Tile area="lat" label="延迟" meta={ready ? '223.5.5.5' : '采样中'}>
+      {!ready ? (
+        <MetricSkeleton spark />
+      ) : (
+        <>
+          <div className="lat-row">
+            <span className={`lat-value ${tone}`}>
+              {online ? Math.round(value) : '--'}
+              <span className="unit"> ms</span>
+            </span>
+            <span className={`lat-quality ${tone}`}>{quality}</span>
+          </div>
+          <div className="lat-spark" aria-hidden="true">
+            {history.map((item, index) => (
+              <span
+                key={index}
+                className={item == null ? 'loss' : ''}
+                style={{ height: `${item == null ? 8 : Math.max(6, (item / max) * 100)}%` }}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </Tile>
+  )
+})
+
+function formatBootTime(uptime) {
+  if (!Number.isFinite(uptime)) return '--'
+  const boot = new Date(Date.now() - uptime * 1000)
+  return `${pad2(boot.getMonth() + 1)}/${pad2(boot.getDate())} ${pad2(boot.getHours())}:${pad2(boot.getMinutes())}`
+}
+
+export const System = memo(function System({ info, uptime, processCount, ready }) {
+  const rows = [
+    ['主机', info?.host],
+    ['系统', info?.platform],
+    ['架构', info?.arch],
+    ['局域网', info?.ip],
+    ['核心', Number.isFinite(info?.cores) ? `${info.cores} 线程` : ''],
+    ['运行', ready ? formatUptime(uptime) : ''],
+    ['开机', ready ? formatBootTime(uptime) : ''],
+    ['进程', ready && Number.isFinite(processCount) ? `${processCount}` : ''],
+  ]
+
+  return (
+    <Tile area="sys" label="系统" meta={info?.host || '本机'}>
+      {!ready ? (
+        <MetricSkeleton />
+      ) : (
+        <div className="sys-grid">
+          {rows.map(([label, value]) => (
+            <div className="sys-item" key={label}>
+              <span className="sys-label">{label}</span>
+              <span className="sys-value ellipsis" title={value || '--'}>
+                {value || '--'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Tile>
+  )
+})
+
+const MEDIA_STATUS = {  playing: '播放中',
   paused: '已暂停',
   stopped: '已停止',
   closed: '未在播放',

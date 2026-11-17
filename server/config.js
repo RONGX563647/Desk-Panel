@@ -4,7 +4,20 @@ import path from 'node:path'
 export const CONFIG_VERSION = 2
 export const ICON_NAMES = ['terminal', 'folder', 'code', 'globe', 'lock']
 export const ACTION_KINDS = ['app', 'url', 'lock']
-export const COMPONENT_IDS = ['clock', 'cpu', 'gpu', 'memory', 'disk', 'network', 'media', 'shortcuts']
+export const COMPONENT_IDS = [
+  'clock',
+  'cpu',
+  'gpu',
+  'memory',
+  'disk',
+  'network',
+  'temp',
+  'processes',
+  'latency',
+  'system',
+  'media',
+  'shortcuts',
+]
 export const MAX_PAGES = 5
 
 export const DEFAULT_LAYOUT = {
