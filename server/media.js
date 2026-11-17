@@ -54,7 +54,16 @@ function ensureHelper() {
 
 export const MEDIA_COMMANDS = ['playpause', 'next', 'prev', 'volume_up', 'volume_down', 'mute']
 
-const EMPTY_STATE = { available: false, title: '', artist: '', album: '', status: 'closed', source: '' }
+const EMPTY_STATE = {
+  available: false,
+  title: '',
+  artist: '',
+  album: '',
+  status: 'closed',
+  source: '',
+  position: 0,
+  duration: 0,
+}
 
 export function createMediaWatcher({ onUpdate = () => {}, logger } = {}) {
   let child = null
@@ -73,6 +82,8 @@ export function createMediaWatcher({ onUpdate = () => {}, logger } = {}) {
         album: typeof next.album === 'string' ? next.album : '',
         status: typeof next.status === 'string' ? next.status : 'closed',
         source: typeof next.source === 'string' ? next.source : '',
+        position: Number.isFinite(next.position) ? Math.max(0, Math.round(next.position)) : 0,
+        duration: Number.isFinite(next.duration) ? Math.max(0, Math.round(next.duration)) : 0,
       }
       // 只有状态真正变化时才推送，避免每 2 秒重复占用带宽
       const serialized = JSON.stringify(state)

@@ -14,6 +14,7 @@ import {
   VolumeUpIcon,
 } from './icons.jsx'
 import { WEEK, formatRate, formatUptime, levelOf, pad2, toGB } from './utils.js'
+import { buildOptimizePlan } from './optimize.js'
 
 function Tile({ area, label, meta, className = '', children }) {
   return (
@@ -356,14 +357,16 @@ function formatCpuTime(seconds) {
 }
 
 export const Processes = memo(function Processes({ list, ready }) {
-  const items = Array.isArray(list) ? list.slice(0, 3) : []
+  const [expanded, setExpanded] = useState(false)
+  const all = Array.isArray(list) ? list.slice(0, 8) : []
+  const items = expanded ? all : all.slice(0, 3)
 
   return (
-    <Tile area="proc" label="进程" meta={ready ? (items.length ? '内存前三' : '不可用') : '采样中'}>
+    <Tile area="proc" label="进程" meta={ready ? (all.length ? `内存前 ${all.length}` : '不可用') : '采样中'}>
       {!ready ? (
         <MetricSkeleton />
       ) : items.length ? (
-        <div className="proc-list">
+        <div className={`proc-list ${expanded ? 'is-expanded' : ''}`}>
           {items.map((item, index) => (
             <div className="proc-row" key={`${item.name}-${index}`}>
               <span className="proc-rank">{index + 1}</span>
@@ -374,6 +377,11 @@ export const Processes = memo(function Processes({ list, ready }) {
               <span className="proc-cpu">{formatCpuTime(item.cpu)}</span>
             </div>
           ))}
+          {all.length > 3 ? (
+            <button type="button" className="proc-more" onClick={() => setExpanded((prev) => !prev)}>
+              {expanded ? '收起' : `查看全部 ${all.length} 个`}
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="keys-empty">进程信息不可用</div>
@@ -381,6 +389,68 @@ export const Processes = memo(function Processes({ list, ready }) {
     </Tile>
   )
 })
+
+export const Optimize = memo(function Optimize({ metrics, info, ready, states = {}, onOptimize, onClearError }) {
+  const plan = useMemo(() => buildOptimizePlan(metrics, info), [metrics, info])
+  const errorEntry = Object.entries(states).find(([, item]) => item?.state === 'error')
+  const [errorKey, error] = errorEntry || []
+
+  return (
+    <Tile area="opt" label="优化" meta={ready ? `健康 ${plan.score}` : '采样中'}>
+      {!ready ? (
+        <MetricSkeleton />
+      ) : (
+        <div className="opt-body">
+          <div className={`opt-score ${plan.level}`}>
+            <strong>{plan.score}</strong>
+            <span>{plan.level === 'ok' ? '良好' : plan.level === 'warn' ? '注意' : '偏高'}</span>
+          </div>
+          <div className="opt-list">
+            {plan.recommendations.map((item) => {
+              const action = item.action
+              const key = action ? `${action.type}-${action.pid || 'all'}` : item.key
+              const state = action ? states[key] : null
+              const busy = state?.state === 'pending'
+              return (
+                <div className={`opt-item ${item.tone}`} key={item.key}>
+                  <div className="opt-item-main">
+                    <span className="opt-title">{item.title}</span>
+                    <span className="opt-detail ellipsis" title={item.detail}>
+                      {item.detail}
+                    </span>
+                  </div>
+                  {action ? (
+                    <button
+                      type="button"
+                      className={`opt-action ${state?.state || ''}`.trim()}
+                      disabled={busy}
+                      aria-busy={busy}
+                      onClick={() => onOptimize(action, key, action.label)}
+                    >
+                      {busy ? '处理中' : state?.state === 'ok' ? '已完成' : action.label}
+                    </button>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {error ? (
+        <div className="opt-alert" role="alert">
+          <span className="ellipsis" title={error.message}>
+            {error.message}
+          </span>
+          <button type="button" onClick={() => onClearError(errorKey)} aria-label="关闭优化错误提示">
+            知道了
+          </button>
+        </div>
+      ) : null}
+    </Tile>
+  )
+})
+
 
 export const Latency = memo(function Latency({ value, ts, ready }) {
   const [history, setHistory] = useState(() => Array(24).fill(null))
@@ -396,9 +466,14 @@ export const Latency = memo(function Latency({ value, ts, ready }) {
   const quality = !online ? '超时' : value < 40 ? '优秀' : value < 80 ? '良好' : value < 150 ? '一般' : '较慢'
   const tone = !online ? 'danger' : value < 60 ? 'ok' : value < 120 ? 'warn' : 'danger'
   const max = useMemo(() => Math.max(120, ...history.filter((item) => Number.isFinite(item))), [history])
+  const avg = useMemo(() => {
+    const samples = history.filter((item) => Number.isFinite(item))
+    if (!samples.length) return null
+    return Math.round(samples.reduce((sum, item) => sum + item, 0) / samples.length)
+  }, [history])
 
   return (
-    <Tile area="lat" label="延迟" meta={ready ? '223.5.5.5' : '采样中'}>
+    <Tile area="lat" label="延迟" meta={ready ? (avg != null ? `均 ${avg} ms` : '223.5.5.5') : '采样中'}>
       {!ready ? (
         <MetricSkeleton spark />
       ) : (
@@ -432,6 +507,22 @@ function formatBootTime(uptime) {
 }
 
 export const System = memo(function System({ info, uptime, processCount, ready }) {
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef(0)
+
+  useEffect(() => () => clearTimeout(copiedTimer.current), [])
+
+  const copyIp = async (ip) => {
+    try {
+      await navigator.clipboard.writeText(ip)
+      setCopied(true)
+      clearTimeout(copiedTimer.current)
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* 浏览器拒绝剪贴板时忽略 */
+    }
+  }
+
   const rows = [
     ['主机', info?.host],
     ['系统', info?.platform],
@@ -452,11 +543,55 @@ export const System = memo(function System({ info, uptime, processCount, ready }
           {rows.map(([label, value]) => (
             <div className="sys-item" key={label}>
               <span className="sys-label">{label}</span>
-              <span className="sys-value ellipsis" title={value || '--'}>
-                {value || '--'}
-              </span>
+              {label === '局域网' && value ? (
+                <button type="button" className="sys-copy" onClick={() => copyIp(value)} title="点击复制地址">
+                  {copied ? '已复制' : value}
+                </button>
+              ) : (
+                <span className="sys-value ellipsis" title={value || '--'}>
+                  {value || '--'}
+                </span>
+              )}
             </div>
           ))}
+        </div>
+      )}
+    </Tile>
+  )
+})
+
+export const Power = memo(function Power({ power, ready }) {
+  const present = !!power?.present
+  const percent = present && Number.isFinite(power.percent) ? power.percent : null
+  const charging = !!power?.charging
+  const level = percent == null ? '' : percent <= 15 ? 'danger' : percent <= 30 ? 'warn' : 'ok'
+  const detail = present ? (charging ? '正在充电' : '电池供电') : '交流供电'
+
+  return (
+    <Tile area="power" label="电源" meta={ready ? detail : '采样中'}>
+      {!ready ? (
+        <MetricSkeleton />
+      ) : present ? (
+        <>
+          <div className="big-value">
+            {percent == null ? '--' : percent}
+            <span className="unit"> %</span>
+          </div>
+          <div
+            className={`bar ${level}`}
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={percent ?? 0}
+          >
+            <span style={{ width: `${percent ?? 0}%` }} />
+          </div>
+          <div className="tile-sub">{charging ? '外接电源 · 充电中' : '使用电池供电'}</div>
+        </>
+      ) : (
+        <div className="power-ac">
+          <span className="power-ac-badge">AC</span>
+          <span>未检测到电池，正在使用交流供电</span>
         </div>
       )}
     </Tile>
@@ -471,9 +606,18 @@ const MEDIA_STATUS = {  playing: '播放中',
   unavailable: '不可用',
 }
 
+const formatMediaTime = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
+  const total = Math.floor(seconds)
+  return `${Math.floor(total / 60)}:${pad2(total % 60)}`
+}
+
 export const Media = memo(function Media({ media, states = {}, onCommand }) {
   const available = !!media?.available
   const playing = media?.status === 'playing'
+  const position = Number.isFinite(media?.position) ? media.position : 0
+  const duration = Number.isFinite(media?.duration) ? media.duration : 0
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (position / duration) * 100)) : 0
   const detail =
     available && media.artist
       ? [media.artist, media.album].filter(Boolean).join(' · ')
@@ -500,6 +644,17 @@ export const Media = memo(function Media({ media, states = {}, onCommand }) {
           {detail}
         </div>
       </div>
+      {available && duration > 0 ? (
+        <div className="media-progress">
+          <div className="bar">
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <div className="media-time">
+            <span>{formatMediaTime(position)}</span>
+            <span>{formatMediaTime(duration)}</span>
+          </div>
+        </div>
+      ) : null}
       <div className="media-controls">
         {controls.map(({ cmd, Icon, label, needsSession }, index) => {
           const pending = states[cmd] === 'pending'

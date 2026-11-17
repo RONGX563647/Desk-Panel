@@ -36,6 +36,7 @@ test('采样帧包含前端所需字段', () => {
     'processes',
     'processCount',
     'latency',
+    'power',
   ]) {
     assert.ok(key in frame, `缺少字段 ${key}`)
   }

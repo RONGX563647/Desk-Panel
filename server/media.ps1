@@ -20,12 +20,21 @@ $manager = Await ($managerType::RequestAsync()) ($managerType)
 
 while ($true) {
   if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { exit }
-  $payload = @{ available = $false; title = ''; artist = ''; album = ''; status = 'closed'; source = '' }
+  $payload = @{ available = $false; title = ''; artist = ''; album = ''; status = 'closed'; source = ''; position = 0; duration = 0 }
   try {
     $session = $manager.GetCurrentSession()
     if ($session) {
       $props = Await ($session.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
       $playback = $session.GetPlaybackInfo()
+      $position = 0
+      $duration = 0
+      try {
+        $timeline = $session.GetTimelineProperties()
+        $position = [int]$timeline.Position.TotalSeconds
+        $duration = [int]$timeline.EndTime.TotalSeconds
+      } catch {
+        # 部分播放器不提供时间轴
+      }
       $payload = @{
         available = $true
         title = "$($props.Title)"
@@ -33,10 +42,12 @@ while ($true) {
         album = "$($props.AlbumTitle)"
         status = "$($playback.PlaybackStatus)"
         source = "$($session.SourceAppUserModelId)"
+        position = $position
+        duration = $duration
       }
     }
   } catch {
-    $payload = @{ available = $false; title = ''; artist = ''; album = ''; status = 'unavailable'; source = '' }
+    $payload = @{ available = $false; title = ''; artist = ''; album = ''; status = 'unavailable'; source = ''; position = 0; duration = 0 }
   }
   $payload | ConvertTo-Json -Compress
   [Console]::Out.Flush()

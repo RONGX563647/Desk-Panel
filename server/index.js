@@ -10,6 +10,7 @@ import { createActionRunner } from './actions.js'
 import { createSampler } from './sampler.js'
 import { createLogger } from './logger.js'
 import { createMediaWatcher, controlMedia } from './media.js'
+import { createOptimizer } from './optimize.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -23,6 +24,7 @@ const METRICS_INTERVAL = Number(process.env.PANEL_METRICS_INTERVAL) || 60 * 1000
 const logger = createLogger(LOG_FILE)
 let config = loadConfig(CONFIG_FILE, { warn: (message) => logger.warn(message) })
 const runAction = createActionRunner()
+const optimizer = createOptimizer()
 const sampler = createSampler()
 const mediaWatcher = createMediaWatcher({
   logger,
@@ -116,6 +118,30 @@ app.post('/api/media', async (req, res) => {
     res.json({ ok: true, command })
   } catch (err) {
     logger.warn(`媒体指令失败：${command} ${err.message}`)
+    res.status(400).json({ ok: false, error: err.message })
+  }
+})
+
+let lastOptimizeAt = 0
+
+app.post('/api/optimize/run', async (req, res) => {
+  if (!authorized(req)) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  // 未设置 token 时，优化动作只允许本机触发，避免局域网任意设备操作进程
+  if (!TOKEN && !isLocalRequest(req)) {
+    return res.status(403).json({ ok: false, error: '优化操作需要先设置 PANEL_TOKEN' })
+  }
+  if (Date.now() - lastOptimizeAt < 800) {
+    return res.status(429).json({ ok: false, error: '操作过于频繁，请稍后再试' })
+  }
+  lastOptimizeAt = Date.now()
+
+  const { action, pid, level } = req.body || {}
+  try {
+    const result = await optimizer.run({ action, pid, level })
+    logger.info(`优化动作已执行：${action}${pid ? `（PID ${pid}）` : ''}`)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    logger.warn(`优化动作失败：${action} ${err.message}`)
     res.status(400).json({ ok: false, error: err.message })
   }
 })

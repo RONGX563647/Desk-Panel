@@ -36,12 +36,14 @@ const COMPONENT_GROUPS = [
       { id: 'processes', label: '进程' },
       { id: 'latency', label: '延迟' },
       { id: 'system', label: '系统' },
+      { id: 'power', label: '电源' },
     ],
   },
   {
     title: '控制与其他',
     items: [
       { id: 'media', label: '媒体' },
+      { id: 'optimize', label: '优化建议' },
       { id: 'shortcuts', label: '快捷操作' },
     ],
   },
@@ -58,6 +60,7 @@ const TEMPLATES = {
     components: ['clock', 'cpu', 'gpu', 'memory', 'disk', 'network', 'temp', 'system'],
   },
   control: { label: '控制', components: ['clock', 'media', 'shortcuts', 'network', 'latency'] },
+  optimize: { label: '优化', components: ['optimize', 'processes', 'shortcuts'] },
   minimal: { label: '极简', components: ['clock', 'memory', 'network', 'shortcuts'] },
 }
 

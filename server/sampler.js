@@ -30,7 +30,7 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
   let diskCache = { mount: 'C:', used: 0, size: 0 }
   let diskList = null
   let diskAt = 0
-  let hardware = { gpu: null, temp: null, processCount: null, processes: [] }
+  let hardware = { gpu: null, temp: null, processCount: null, processes: [], power: null }
   let hardwareBusy = false
   let networkBusy = false
   let netTimer = null
@@ -184,7 +184,7 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
 
   async function refreshProcesses() {
     const output = await runPowerShell(
-      `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $all = Get-Process; @{ count = $all.Count; top = @($all | Sort-Object WorkingSet64 -Descending | Select-Object -First 3 ProcessName,WorkingSet64,CPU) } | ConvertTo-Json -Compress -Depth 3`,
+      `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $all = Get-Process; @{ count = $all.Count; top = @($all | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 ProcessName,Id,WorkingSet64,CPU) } | ConvertTo-Json -Compress -Depth 3`,
       10000
     )
     if (!output.trim()) return
@@ -193,6 +193,7 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
       const rawList = Array.isArray(data?.top) ? data.top : data?.top ? [data.top] : []
       const list = rawList
         .map((item) => ({
+          id: Number.isInteger(item?.Id) ? item.Id : null,
           name: typeof item?.ProcessName === 'string' ? item.ProcessName : '',
           mem: toNumber(item?.WorkingSet64) ?? 0,
           cpu: toNumber(item?.CPU) ?? 0,
@@ -206,12 +207,41 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
     }
   }
 
+  async function refreshPower() {
+    const output = await runPowerShell(
+      `$b = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1 EstimatedChargeRemaining,BatteryStatus; if ($b) { @{ present = $true; percent = [int]$b.EstimatedChargeRemaining; status = [int]$b.BatteryStatus } | ConvertTo-Json -Compress } else { '{"present":false}' }`,
+      8000
+    )
+    if (!output.trim()) return
+    try {
+      const data = JSON.parse(output)
+      if (!data?.present) {
+        hardware.power = { present: false, percent: null, status: 0, charging: false }
+        return
+      }
+      const percent = toNumber(data.percent)
+      const status = toNumber(data.status) ?? 0
+      hardware.power = {
+        present: true,
+        percent: percent == null ? null : Math.max(0, Math.min(100, Math.round(percent))),
+        status: Math.round(status),
+        charging: [2, 6, 7, 8, 9].includes(Math.round(status)),
+      }
+    } catch {
+      /* 输出不是合法 JSON 时忽略本次刷新 */
+    }
+  }
+
   async function refreshLatency() {
     const output = await runPowerShell(
       '$r = Test-Connection -ComputerName 223.5.5.5 -Count 1 -ErrorAction SilentlyContinue; if ($r) { $r.ResponseTime }',
       6000
     )
     const text = output.trim().split(/\r?\n/)[0] || ''
+    if (!text) {
+      latency = null
+      return
+    }
     const ms = toNumber(text)
     latency = ms != null && ms >= 0 ? Math.round(ms) : null
   }
@@ -221,7 +251,7 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
     if (hardwareBusy) return
     hardwareBusy = true
     try {
-      await Promise.all([refreshDisks(), refreshGpu(), refreshCpuTemp(), refreshProcesses()])
+      await Promise.all([refreshDisks(), refreshGpu(), refreshCpuTemp(), refreshProcesses(), refreshPower()])
     } finally {
       hardwareBusy = false
     }
@@ -283,6 +313,7 @@ export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 
       temp: hardware.temp,
       processCount: hardware.processCount,
       processes: hardware.processes,
+      power: hardware.power,
       rx: netRate.rx,
       tx: netRate.tx,
       latency,

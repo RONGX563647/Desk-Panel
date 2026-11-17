@@ -47,7 +47,9 @@ export const COMPONENT_SPANS = {
   processes: 7,
   latency: 5,
   system: 6,
+  power: 4,
   media: 4,
+  optimize: 4,
   shortcuts: 12,
 }
 

@@ -117,11 +117,11 @@ test('新增资源卡片可在布局中使用', () => {
     version: 2,
     actions: [],
     layout: {
-      pages: [{ name: '监控', components: ['system', 'temp', 'processes', 'latency'] }],
+      pages: [{ name: '监控', components: ['system', 'temp', 'processes', 'latency', 'power'] }],
     },
   })
 
-  assert.deepEqual(saved.layout.pages[0].components, ['system', 'temp', 'processes', 'latency'])
+  assert.deepEqual(saved.layout.pages[0].components, ['system', 'temp', 'processes', 'latency', 'power'])
   fs.rmSync(dir, { recursive: true, force: true })
 })
 

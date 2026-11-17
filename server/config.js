@@ -15,7 +15,9 @@ export const COMPONENT_IDS = [
   'processes',
   'latency',
   'system',
+  'power',
   'media',
+  'optimize',
   'shortcuts',
 ]
 export const MAX_PAGES = 5

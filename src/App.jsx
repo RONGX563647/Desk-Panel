@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePanel } from './usePanel.js'
-import { Clock, Cpu, Disk, Gpu, Latency, Media, Memory, Network, Processes, Shortcuts, System, Temp } from './widgets.jsx'
+import {
+  Clock,
+  Cpu,
+  Disk,
+  Gpu,
+  Latency,
+  Media,
+  Memory,
+  Network,
+  Optimize,
+  Power,
+  Processes,
+  Shortcuts,
+  System,
+  Temp,
+} from './widgets.jsx'
 import InstallHint from './InstallHint.jsx'
 import { CloseIcon, FullscreenIcon, SunIcon, ThemeIcon } from './icons.jsx'
 import { formatClock, formatUptime, packRows, wrapPage } from './utils.js'
@@ -26,6 +41,7 @@ export default function App() {
   const [toasts, setToasts] = useState([])
   const [actionStates, setActionStates] = useState({})
   const [mediaStates, setMediaStates] = useState({})
+  const [optimizeStates, setOptimizeStates] = useState({})
   const [activePage, setActivePage] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(() => !!document.fullscreenElement)
   const [wake, setWake] = useState(false)
@@ -40,6 +56,8 @@ export default function App() {
   const actionTimers = useRef(new Map())
   const pendingMedia = useRef(new Set())
   const mediaTimers = useRef(new Map())
+  const pendingOptimize = useRef(new Set())
+  const optimizeTimers = useRef(new Map())
   const controllers = useRef(new Set())
   const aliveRef = useRef(true)
   const wakeRef = useRef(null)
@@ -79,6 +97,8 @@ export default function App() {
       actionTimers.current.clear()
       mediaTimers.current.forEach((t) => clearTimeout(t))
       mediaTimers.current.clear()
+      optimizeTimers.current.forEach((t) => clearTimeout(t))
+      optimizeTimers.current.clear()
       controllers.current.forEach((c) => c.abort())
       controllers.current.clear()
       if (wakeRef.current) {
@@ -161,6 +181,80 @@ export default function App() {
       return next
     })
   }, [])
+
+  const clearOptimizeError = useCallback((key) => {
+    setOptimizeStates((prev) => {
+      if (!prev[key]) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }, [])
+
+  const runOptimize = useCallback(
+    async (action, key, label) => {
+      if (pendingOptimize.current.has(key)) return
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法执行优化')
+        return
+      }
+
+      pendingOptimize.current.add(key)
+      const prevTimer = optimizeTimers.current.get(key)
+      if (prevTimer) {
+        clearTimeout(prevTimer)
+        optimizeTimers.current.delete(key)
+      }
+      setOptimizeStates((prev) => ({ ...prev, [key]: { state: 'pending' } }))
+
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 15000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/optimize/run${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: action.type, pid: action.pid, level: action.level }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（${res.status}）`)
+        if (!aliveRef.current) return
+
+        setOptimizeStates((prev) => ({ ...prev, [key]: { state: 'ok', result: data } }))
+        const freed = Number(data.freed)
+        pushToast(
+          'success',
+          Number.isFinite(freed) && freed > 0
+            ? `${label}完成，释放 ${Math.round(freed / 1024 / 1024)} MB`
+            : `${label}完成`
+        )
+        const timer = setTimeout(() => {
+          optimizeTimers.current.delete(key)
+          setOptimizeStates((prev) => {
+            if (prev[key]?.state !== 'ok') return prev
+            const next = { ...prev }
+            delete next[key]
+            return next
+          })
+        }, 2000)
+        optimizeTimers.current.set(key, timer)
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError' ? '优化请求超时，请检查电脑端是否仍在运行' : err.message || '优化失败'
+        setOptimizeStates((prev) => ({ ...prev, [key]: { state: 'error', message } }))
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+        pendingOptimize.current.delete(key)
+      }
+    },
+    [pushToast, status, token]
+  )
 
   const runMedia = useCallback(
     async (command) => {
@@ -458,6 +552,18 @@ export default function App() {
         return <Temp key="temp" cpuTemp={metrics?.temp} gpuTemp={metrics?.gpu?.temperature} ready={ready} />
       case 'processes':
         return <Processes key="processes" list={metrics?.processes} ready={ready} />
+      case 'optimize':
+        return (
+          <Optimize
+            key="optimize"
+            metrics={metrics}
+            info={info}
+            ready={ready}
+            states={optimizeStates}
+            onOptimize={runOptimize}
+            onClearError={clearOptimizeError}
+          />
+        )
       case 'latency':
         return <Latency key="latency" value={metrics?.latency} ts={metrics?.ts} ready={ready} />
       case 'system':
@@ -470,6 +576,8 @@ export default function App() {
             ready={ready}
           />
         )
+      case 'power':
+        return <Power key="power" power={metrics?.power} ready={ready} />
       case 'media':
         return (
           <Media
