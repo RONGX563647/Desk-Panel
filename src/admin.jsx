@@ -21,6 +21,26 @@ const KIND_TARGET_HINT = {
   lock: '锁定当前会话（系统动作）',
 }
 
+const COMPONENTS = [
+  { id: 'clock', label: '时间' },
+  { id: 'cpu', label: 'CPU' },
+  { id: 'gpu', label: 'GPU' },
+  { id: 'memory', label: '内存' },
+  { id: 'disk', label: '磁盘' },
+  { id: 'network', label: '网络' },
+  { id: 'media', label: '媒体' },
+  { id: 'shortcuts', label: '快捷操作' },
+]
+
+const TEMPLATES = {
+  default: { label: '默认', components: ['clock', 'cpu', 'memory', 'disk', 'network', 'shortcuts'] },
+  monitor: { label: '监控', components: ['clock', 'cpu', 'gpu', 'memory', 'disk', 'network'] },
+  control: { label: '控制', components: ['clock', 'media', 'shortcuts', 'network'] },
+  minimal: { label: '极简', components: ['clock', 'memory', 'network', 'shortcuts'] },
+}
+
+const MAX_PAGES = 5
+
 function newAction(kind) {
   return {
     id: `act_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
@@ -109,6 +129,96 @@ export default function AdminPanel() {
     setNotice('')
   }, [])
 
+  const updatePage = useCallback((index, patch) => {
+    setConfig((prev) => {
+      if (!prev?.layout) return prev
+      return {
+        ...prev,
+        layout: {
+          ...prev.layout,
+          pages: prev.layout.pages.map((page, i) => (i === index ? { ...page, ...patch } : page)),
+        },
+      }
+    })
+    setNotice('')
+  }, [])
+
+  const applyTemplate = useCallback(
+    (index, key) => {
+      const template = TEMPLATES[key]
+      if (template) updatePage(index, { components: [...template.components] })
+    },
+    [updatePage]
+  )
+
+  const toggleComponent = useCallback((index, id) => {
+    setConfig((prev) => {
+      if (!prev?.layout) return prev
+      return {
+        ...prev,
+        layout: {
+          ...prev.layout,
+          pages: prev.layout.pages.map((page, i) => {
+            if (i !== index) return page
+            const has = page.components.includes(id)
+            return {
+              ...page,
+              components: has ? page.components.filter((item) => item !== id) : [...page.components, id],
+            }
+          }),
+        },
+      }
+    })
+    setNotice('')
+  }, [])
+
+  const movePage = useCallback((index, delta) => {
+    setConfig((prev) => {
+      if (!prev?.layout) return prev
+      const pages = [...prev.layout.pages]
+      const target = index + delta
+      if (target < 0 || target >= pages.length) return prev
+      ;[pages[index], pages[target]] = [pages[target], pages[index]]
+      return { ...prev, layout: { ...prev.layout, pages } }
+    })
+    setNotice('')
+  }, [])
+
+  const addPage = useCallback(() => {
+    setConfig((prev) => {
+      if (!prev?.layout || prev.layout.pages.length >= MAX_PAGES) return prev
+      return {
+        ...prev,
+        layout: {
+          ...prev.layout,
+          pages: [
+            ...prev.layout.pages,
+            {
+              id: `page_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+              name: `页面 ${prev.layout.pages.length + 1}`,
+              components: [...TEMPLATES.default.components],
+            },
+          ],
+        },
+      }
+    })
+    setNotice('')
+  }, [])
+
+  const removePage = useCallback(
+    (index) => {
+      if (!config?.layout || config.layout.pages.length <= 1) return
+      const page = config.layout.pages[index]
+      if (!window.confirm(`确定删除页面「${page.name}」？`)) return
+      setConfig({
+        ...config,
+        layout: { ...config.layout, pages: config.layout.pages.filter((_, i) => i !== index) },
+      })
+      setNotice('')
+    },
+    [config]
+  )
+
   const save = useCallback(async () => {
     if (!config || saving) return
     setSaving(true)
@@ -163,6 +273,7 @@ export default function AdminPanel() {
           <div className="admin-empty">正在读取配置…</div>
         ) : config ? (
           <>
+            <h2 className="admin-section-title">快捷动作</h2>
             {config.actions.length ? (
               config.actions.map((action, index) => {
                 const Icon = ICON_OPTIONS.find((item) => item.value === action.icon)?.Icon || TerminalIcon
@@ -271,13 +382,117 @@ export default function AdminPanel() {
               <div className="admin-empty">还没有动作，先在下方新增一个。</div>
             )}
 
-            <div className="admin-footer">
+            <div className="admin-footer admin-footer--inline">
               <button type="button" className="btn ghost" onClick={() => addAction('app')}>
                 新增应用动作
               </button>
               <button type="button" className="btn ghost" onClick={() => addAction('url')}>
                 新增网址动作
               </button>
+            </div>
+
+            <h2 className="admin-section-title">页面布局</h2>
+            <p className="admin-note">
+              最多 {MAX_PAGES} 个页面，手机端可左右滑动或点击圆点切换；每个页面至少保留一个组件。
+            </p>
+
+            {(config.layout?.pages || []).map((page, index) => {
+              const pages = config.layout.pages
+              return (
+                <section className="admin-card" key={page.id}>
+                  <div className="admin-row">
+                    <label className="admin-field">
+                      <span>页面名称</span>
+                      <input
+                        className="input"
+                        value={page.name}
+                        maxLength={12}
+                        onChange={(e) => updatePage(index, { name: e.target.value })}
+                      />
+                    </label>
+                    <label className="admin-field admin-field--icon">
+                      <span>套用模板</span>
+                      <select
+                        className="input"
+                        value=""
+                        onChange={(e) => {
+                          if (e.target.value) applyTemplate(index, e.target.value)
+                        }}
+                      >
+                        <option value="">选择模板</option>
+                        {Object.entries(TEMPLATES).map(([key, template]) => (
+                          <option key={key} value={key}>
+                            {template.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="admin-order">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={() => movePage(index, -1)}
+                        disabled={index === 0}
+                        aria-label={`上移 ${page.name}`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={() => movePage(index, 1)}
+                        disabled={index === pages.length - 1}
+                        aria-label={`下移 ${page.name}`}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        onClick={() => removePage(index)}
+                        disabled={pages.length <= 1}
+                        aria-label={`删除 ${page.name}`}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="admin-components">
+                    {COMPONENTS.map((item) => {
+                      const checked = page.components.includes(item.id)
+                      return (
+                        <label className="admin-check" key={item.id}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={checked && page.components.length === 1}
+                            onChange={() => toggleComponent(index, item.id)}
+                          />
+                          <span>{item.label}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </section>
+              )
+            })}
+
+            <div className="admin-footer admin-footer--inline">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={addPage}
+                disabled={(config.layout?.pages.length || 0) >= MAX_PAGES}
+              >
+                新增页面
+              </button>
+              <span className="admin-hint">
+                已有 {config.layout?.pages.length || 0} / {MAX_PAGES} 个页面
+              </span>
+            </div>
+
+            <div className="admin-footer admin-savebar">
               {dirty ? <span className="admin-dirty">有未保存的修改</span> : null}
               {notice ? <span className="admin-notice">{notice}</span> : null}
               <button type="button" className="btn primary" onClick={save} disabled={saving || !dirty}>

@@ -5,10 +5,11 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { findAction, loadConfig, publicActions, saveConfig } from './config.js'
+import { findAction, loadConfig, publicActions, publicLayout, saveConfig } from './config.js'
 import { createActionRunner } from './actions.js'
 import { createSampler } from './sampler.js'
 import { createLogger } from './logger.js'
+import { createMediaWatcher, controlMedia } from './media.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -17,11 +18,16 @@ const TOKEN = process.env.PANEL_TOKEN || ''
 const DATA_DIR = path.join(ROOT, 'data')
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json')
 const LOG_FILE = path.join(DATA_DIR, 'panel.log')
+const METRICS_INTERVAL = Number(process.env.PANEL_METRICS_INTERVAL) || 60 * 1000
 
 const logger = createLogger(LOG_FILE)
 let config = loadConfig(CONFIG_FILE, { warn: (message) => logger.warn(message) })
 const runAction = createActionRunner()
 const sampler = createSampler()
+const mediaWatcher = createMediaWatcher({
+  logger,
+  onUpdate: (media) => broadcast({ t: 'media', media }),
+})
 
 const app = express()
 app.use(express.json())
@@ -80,12 +86,24 @@ app.get('/api/admin/config', (req, res) => {
 app.put('/api/admin/config', (req, res) => {
   try {
     config = saveConfig(CONFIG_FILE, req.body)
-    logger.info(`动作配置已保存，共 ${config.actions.length} 个动作`)
-    broadcast({ t: 'config', actions: publicActions(config) })
+    logger.info(`配置已保存，共 ${config.actions.length} 个动作、${config.layout.pages.length} 个页面`)
+    broadcast({ t: 'config', actions: publicActions(config), layout: publicLayout(config) })
     res.json({ ok: true, config })
   } catch (err) {
-    logger.warn(`动作配置保存失败：${err.message}`)
+    logger.warn(`配置保存失败：${err.message}`)
     res.status(400).json({ ok: false, error: err.message, errors: err.errors || [] })
+  }
+})
+
+app.post('/api/media', async (req, res) => {
+  if (!authorized(req)) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  const { command } = req.body || {}
+  try {
+    await controlMedia(command)
+    res.json({ ok: true, command })
+  } catch (err) {
+    logger.warn(`媒体指令失败：${command} ${err.message}`)
+    res.status(400).json({ ok: false, error: err.message })
   }
 })
 
@@ -118,11 +136,29 @@ if (fs.existsSync(DIST)) {
 }
 
 const server = createServer(app)
-const wss = new WebSocketServer({ server, path: '/ws' })
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  // 指标改为低频推送后仍开启压缩，进一步降低局域网带宽占用
+  perMessageDeflate: { threshold: 0 },
+})
 const clients = new Set()
 let latest = null
 
 wss.on('connection', (ws, req) => {
+  try {
+    setupConnection(ws, req)
+  } catch (err) {
+    logger.error(`WS 连接初始化失败：${err.stack || err.message}`)
+    try {
+      ws.close(1011, 'server error')
+    } catch {
+      /* 忽略关闭异常 */
+    }
+  }
+})
+
+function setupConnection(ws, req) {
   const url = new URL(req.url, 'http://localhost')
   if (TOKEN && url.searchParams.get('token') !== TOKEN) {
     ws.close(1008, 'unauthorized')
@@ -138,19 +174,43 @@ wss.on('connection', (ws, req) => {
     } catch (err) {
       logger.error(`首次采样失败：${err.message}`)
     }
-    sampler.startNetworkPolling()
   }
-  ws.send(JSON.stringify({ t: 'hello', info, actions: publicActions(config) }))
+  ws.send(
+    JSON.stringify({
+      t: 'hello',
+      info,
+      actions: publicActions(config),
+      layout: publicLayout(config),
+      media: mediaWatcher.getState(),
+    })
+  )
   if (latest) ws.send(JSON.stringify({ t: 'metrics', ...latest }))
+  if (clients.size === 1) {
+    // 先让首帧发出去，再启动后台轮询，避免硬件采集拖慢首屏
+    setTimeout(() => {
+      if (clients.size === 0) return
+      sampler.startNetworkPolling()
+      sampler.startHardwarePolling()
+      mediaWatcher.start()
+    }, 800)
+  }
   ws.on('close', () => {
     clients.delete(ws)
-    if (clients.size === 0) sampler.stopNetworkPolling()
+    if (clients.size === 0) {
+      sampler.stopNetworkPolling()
+      sampler.stopHardwarePolling()
+      mediaWatcher.stop()
+    }
   })
   ws.on('error', () => {
     clients.delete(ws)
-    if (clients.size === 0) sampler.stopNetworkPolling()
+    if (clients.size === 0) {
+      sampler.stopNetworkPolling()
+      sampler.stopHardwarePolling()
+      mediaWatcher.stop()
+    }
   })
-})
+}
 
 function broadcast(payload) {
   const text = JSON.stringify(payload)
@@ -165,15 +225,31 @@ setInterval(() => {
   busy = true
   try {
     latest = sampler.sample()
-    broadcast({ t: 'metrics', ...latest })
+    broadcast({ t: 'metrics', ...latest, media: mediaWatcher.getState() })
   } catch (err) {
     logger.error(`采样失败：${err.message}`)
   } finally {
     busy = false
   }
-}, 1000)
+}, METRICS_INTERVAL)
 
 sampler.readDisk(true)
+
+function shutdown() {
+  try {
+    mediaWatcher.stop()
+    sampler.stopNetworkPolling()
+    sampler.stopHardwarePolling()
+    for (const ws of clients) ws.close()
+  } catch {
+    /* 忽略关闭异常 */
+  }
+  server.close(() => process.exit(0))
+  setTimeout(() => process.exit(0), 1500).unref()
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
 
 server.listen(PORT, '0.0.0.0', () => {
   const suffix = TOKEN ? `/?token=${TOKEN}` : '/'

@@ -101,6 +101,70 @@ export function ThemeIcon({ size }) {
   )
 }
 
+export function PlayIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none" />
+    </Svg>
+  )
+}
+
+export function PauseIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none" />
+      <rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none" />
+    </Svg>
+  )
+}
+
+export function PrevIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <path d="M17 5v14L7 12z" fill="currentColor" stroke="none" />
+      <path d="M6 5v14" />
+    </Svg>
+  )
+}
+
+export function NextIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <path d="M7 5v14l10-7z" fill="currentColor" stroke="none" />
+      <path d="M18 5v14" />
+    </Svg>
+  )
+}
+
+export function VolumeUpIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <path d="M4 9.5h3l4-3.5v12l-4-3.5H4z" />
+      <path d="M15 9a4 4 0 0 1 0 6" />
+      <path d="M17.5 6.5a7.5 7.5 0 0 1 0 11" />
+    </Svg>
+  )
+}
+
+export function VolumeDownIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <path d="M4 9.5h3l4-3.5v12l-4-3.5H4z" />
+      <path d="M15 9a4 4 0 0 1 0 6" />
+    </Svg>
+  )
+}
+
+export function MuteIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <path d="M4 9.5h3l4-3.5v12l-4-3.5H4z" />
+      <path d="m15 9 4 6" />
+      <path d="m19 9-4 6" />
+    </Svg>
+  )
+}
+
 export function RefreshIcon({ size }) {
   return (
     <Svg size={size}>

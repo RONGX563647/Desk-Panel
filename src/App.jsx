@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePanel } from './usePanel.js'
-import { Clock, Cpu, Disk, Memory, Network, Shortcuts } from './widgets.jsx'
+import { Clock, Cpu, Disk, Gpu, Media, Memory, Network, Shortcuts } from './widgets.jsx'
+import InstallHint from './InstallHint.jsx'
 import { CloseIcon, FullscreenIcon, RefreshIcon, SunIcon, ThemeIcon } from './icons.jsx'
 import { formatClock, formatUptime } from './utils.js'
 
@@ -11,13 +12,21 @@ const STATUS_TEXT = {
   offline: '离线',
 }
 
+const FALLBACK_PAGE = {
+  id: 'main',
+  name: '主页',
+  components: ['clock', 'cpu', 'memory', 'disk', 'network', 'shortcuts'],
+}
+
 const THEME_KEY = 'panel-theme'
 const THEME_COLOR = { dark: '#0b0f14', light: '#eef1f5' }
 
 export default function App() {
-  const { metrics, info, actions, status, lastUpdate, reconnect } = usePanel()
+  const { metrics, info, actions, layout, media, status, lastUpdate, reconnect } = usePanel()
   const [toasts, setToasts] = useState([])
   const [actionStates, setActionStates] = useState({})
+  const [mediaStates, setMediaStates] = useState({})
+  const [activePage, setActivePage] = useState(0)
   const [offlineDismissed, setOfflineDismissed] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(() => !!document.fullscreenElement)
   const [wake, setWake] = useState(false)
@@ -30,9 +39,12 @@ export default function App() {
   const toastTimers = useRef(new Map())
   const pendingActions = useRef(new Set())
   const actionTimers = useRef(new Map())
+  const pendingMedia = useRef(new Set())
+  const mediaTimers = useRef(new Map())
   const controllers = useRef(new Set())
   const aliveRef = useRef(true)
   const wakeRef = useRef(null)
+  const swipeRef = useRef(null)
 
   const dismissToast = useCallback((id) => {
     const timer = toastTimers.current.get(id)
@@ -65,6 +77,8 @@ export default function App() {
       toastTimers.current.clear()
       actionTimers.current.forEach((t) => clearTimeout(t))
       actionTimers.current.clear()
+      mediaTimers.current.forEach((t) => clearTimeout(t))
+      mediaTimers.current.clear()
       controllers.current.forEach((c) => c.abort())
       controllers.current.clear()
       if (wakeRef.current) {
@@ -147,6 +161,67 @@ export default function App() {
       return next
     })
   }, [])
+
+  const runMedia = useCallback(
+    async (command) => {
+      if (pendingMedia.current.has(command)) return
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法控制媒体')
+        return
+      }
+
+      pendingMedia.current.add(command)
+      const prevTimer = mediaTimers.current.get(command)
+      if (prevTimer) {
+        clearTimeout(prevTimer)
+        mediaTimers.current.delete(command)
+      }
+      setMediaStates((prev) => ({ ...prev, [command]: 'pending' }))
+
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 8000)
+      const clearState = (delay) => {
+        const timer = setTimeout(() => {
+          mediaTimers.current.delete(command)
+          setMediaStates((prev) => {
+            if (!prev[command]) return prev
+            const next = { ...prev }
+            delete next[command]
+            return next
+          })
+        }, delay)
+        mediaTimers.current.set(command, timer)
+      }
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/media${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（${res.status}）`)
+        if (!aliveRef.current) return
+        setMediaStates((prev) => ({ ...prev, [command]: 'ok' }))
+        clearState(800)
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError' ? '媒体指令超时，请检查电脑端是否仍在运行' : err.message || '媒体指令失败'
+        setMediaStates((prev) => ({ ...prev, [command]: 'error' }))
+        pushToast('error', message)
+        clearState(2200)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+        pendingMedia.current.delete(command)
+      }
+    },
+    [pushToast, status, token]
+  )
 
   // 全屏 / 屏幕常亮
   useEffect(() => {
@@ -253,6 +328,98 @@ export default function App() {
   const themeLabel = theme === 'light' ? '白色主题' : '深色主题'
   const themeAction = theme === 'light' ? '切换到深色主题' : '切换到白色极客主题'
 
+  const pages = useMemo(() => {
+    if (layout?.pages?.length) return layout.pages
+    return [FALLBACK_PAGE]
+  }, [layout])
+  const pageIndex = Math.min(activePage, pages.length - 1)
+  const page = pages[pageIndex]
+
+  useEffect(() => {
+    setActivePage((prev) => Math.min(prev, pages.length - 1))
+  }, [pages.length])
+
+  const changePage = useCallback(
+    (delta) => {
+      setActivePage((prev) => {
+        const next = prev + delta
+        return next < 0 || next >= pages.length ? prev : next
+      })
+    },
+    [pages.length]
+  )
+
+  const onPointerDown = useCallback(
+    (event) => {
+      if (pages.length < 2) return
+      if (event.target.closest('button, a, input, select, textarea')) return
+      swipeRef.current = { x: event.clientX, y: event.clientY, t: Date.now() }
+    },
+    [pages.length]
+  )
+
+  const onPointerUp = useCallback(
+    (event) => {
+      const start = swipeRef.current
+      swipeRef.current = null
+      if (!start) return
+      const dx = event.clientX - start.x
+      const dy = event.clientY - start.y
+      if (Date.now() - start.t > 900) return
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.4) return
+      changePage(dx < 0 ? 1 : -1)
+    },
+    [changePage]
+  )
+
+  const renderWidget = (id) => {
+    switch (id) {
+      case 'clock':
+        return <Clock key="clock" />
+      case 'cpu':
+        return (
+          <Cpu
+            key="cpu"
+            value={metrics?.cpu}
+            cores={metrics?.cores}
+            model={info?.cpu}
+            temp={metrics?.temp}
+            processCount={metrics?.processCount}
+            ready={ready}
+          />
+        )
+      case 'gpu':
+        return <Gpu key="gpu" gpu={metrics?.gpu} ready={ready} />
+      case 'memory':
+        return <Memory key="memory" used={metrics?.memUsed} total={metrics?.memTotal} ready={ready} />
+      case 'disk':
+        return <Disk key="disk" disk={metrics?.disk} disks={metrics?.disks} ready={ready} />
+      case 'network':
+        return <Network key="network" rx={metrics?.rx} tx={metrics?.tx} ts={metrics?.ts} ready={ready} />
+      case 'media':
+        return (
+          <Media
+            key="media"
+            media={media || { available: false, title: '', artist: '', album: '', status: 'closed' }}
+            states={mediaStates}
+            onCommand={runMedia}
+          />
+        )
+      case 'shortcuts':
+        return (
+          <Shortcuts
+            key="shortcuts"
+            actions={actions}
+            states={actionStates}
+            onAction={runAction}
+            onClearError={clearActionError}
+          />
+        )
+      default:
+        return null
+    }
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -295,13 +462,51 @@ export default function App() {
         </div>
       ) : null}
 
-      <main className="grid">
-        <Clock />
-        <Cpu value={metrics?.cpu} cores={metrics?.cores} model={info?.cpu} ready={ready} />
-        <Memory used={metrics?.memUsed} total={metrics?.memTotal} ready={ready} />
-        <Disk disk={metrics?.disk} ready={ready} />
-        <Network rx={metrics?.rx} tx={metrics?.tx} ts={metrics?.ts} ready={ready} />
-        <Shortcuts actions={actions} states={actionStates} onAction={runAction} onClearError={clearActionError} />
+      <InstallHint />
+
+      {pages.length > 1 ? (
+        <nav className="page-nav" aria-label="页面切换">
+          <button
+            type="button"
+            className="page-arrow"
+            onClick={() => changePage(-1)}
+            disabled={pageIndex === 0}
+            aria-label="上一页"
+          >
+            ‹
+          </button>
+          {pages.map((item, index) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`page-dot ${index === pageIndex ? 'active' : ''}`}
+              onClick={() => setActivePage(index)}
+              aria-label={item.name}
+              aria-current={index === pageIndex ? 'page' : undefined}
+              title={item.name}
+            />
+          ))}
+          <button
+            type="button"
+            className="page-arrow"
+            onClick={() => changePage(1)}
+            disabled={pageIndex === pages.length - 1}
+            aria-label="下一页"
+          >
+            ›
+          </button>
+        </nav>
+      ) : null}
+
+      <main
+        className="grid"
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          swipeRef.current = null
+        }}
+      >
+        {page.components.map(renderWidget)}
       </main>
 
       {status === 'offline' && !offlineDismissed ? (

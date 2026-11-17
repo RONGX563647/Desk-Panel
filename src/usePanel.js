@@ -5,6 +5,8 @@ export function usePanel() {
   const [metrics, setMetrics] = useState(null)
   const [info, setInfo] = useState(null)
   const [actions, setActions] = useState([])
+  const [layout, setLayout] = useState(null)
+  const [media, setMedia] = useState(null)
   const [status, setStatus] = useState('connecting')
   const [lastUpdate, setLastUpdate] = useState(0)
 
@@ -15,7 +17,7 @@ export function usePanel() {
   const pendingRef = useRef(null)
   const lastMsgRef = useRef(0)
 
-  const connect = useCallback(() => {
+  const connect = useCallback(({ silent = false } = {}) => {
     if (!aliveRef.current) return
     clearTimeout(retryTimerRef.current)
 
@@ -32,7 +34,8 @@ export function usePanel() {
       }
     }
 
-    setStatus('connecting')
+    // 自动重连期间保持“离线”状态，避免反复弹出重连提示
+    if (!silent) setStatus('connecting')
 
     const token = new URLSearchParams(location.search).get('token') || ''
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -56,11 +59,19 @@ export function usePanel() {
       if (msg.t === 'hello') {
         setInfo(msg.info)
         if (Array.isArray(msg.actions)) setActions(msg.actions)
+        if (msg.layout?.pages?.length) setLayout(msg.layout)
+        if (msg.media) setMedia(msg.media)
       }
-      if (msg.t === 'config' && Array.isArray(msg.actions)) setActions(msg.actions)
+      if (msg.t === 'config') {
+        if (Array.isArray(msg.actions)) setActions(msg.actions)
+        if (msg.layout?.pages?.length) setLayout(msg.layout)
+      }
+      if (msg.t === 'media' && msg.media) setMedia(msg.media)
       if (msg.t === 'metrics') {
         lastMsgRef.current = Date.now()
         setLastUpdate(lastMsgRef.current)
+        if (msg.media) setMedia(msg.media)
+        setStatus('online')
         // 页面不可见时不触发 React 渲染，回到前台再一次性补齐。
         if (document.hidden) pendingRef.current = msg
         else setMetrics(msg)
@@ -72,7 +83,7 @@ export function usePanel() {
       if (!aliveRef.current) return
       setStatus('offline')
       const delay = Math.min(1000 * 2 ** retryRef.current++, 8000)
-      retryTimerRef.current = setTimeout(connect, delay)
+      retryTimerRef.current = setTimeout(() => connect({ silent: true }), delay)
     }
 
     ws.onerror = () => {
@@ -104,8 +115,9 @@ export function usePanel() {
       const ws = wsRef.current
       if (!ws || ws.readyState !== 1) return
       const gap = Date.now() - (lastMsgRef.current || Date.now())
-      setStatus(gap > 3000 ? 'weak' : 'online')
-    }, 1500)
+      // 推送间隔为 1 分钟，连续 5 分钟没有新数据才提示延迟
+      setStatus(gap > 5 * 60 * 1000 ? 'weak' : 'online')
+    }, 5000)
 
     document.addEventListener('visibilitychange', onVisible)
     return () => {
@@ -132,5 +144,5 @@ export function usePanel() {
     connect()
   }, [connect])
 
-  return { metrics, info, actions, status, lastUpdate, reconnect }
+  return { metrics, info, actions, layout, media, status, lastUpdate, reconnect }
 }

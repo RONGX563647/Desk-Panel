@@ -272,21 +272,128 @@ button {
   padding: 5px 10px;
 }
 
+/* ---------- 安装提示 ---------- */
+.install-hint {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--brand-dim);
+  border: 1px solid var(--brand-line);
+  border-radius: 10px;
+}
+
+.install-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.install-text strong {
+  font-size: 12px;
+}
+
+.install-text span {
+  color: var(--muted);
+}
+
+.install-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.install-hint .btn {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+/* ---------- 页面切换 ---------- */
+.page-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.page-arrow {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.page-arrow:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.page-arrow:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.page-dot {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.page-dot::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.page-dot.active::before {
+  background: var(--brand);
+  transform: scale(1.35);
+}
+
+.page-dot:focus-visible,
+.page-arrow:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
 /* ---------- 网格 ---------- */
 .grid {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(12, 1fr);
-  grid-template-rows: repeat(6, 1fr);
-  grid-template-areas:
-    "clock clock clock clock clock cpu cpu cpu cpu cpu cpu cpu"
-    "clock clock clock clock clock cpu cpu cpu cpu cpu cpu cpu"
-    "mem mem mem mem disk disk disk disk net net net net"
-    "mem mem mem mem disk disk disk disk net net net net"
-    "keys keys keys keys keys keys keys keys keys keys keys keys"
-    "keys keys keys keys keys keys keys keys keys keys keys keys";
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: minmax(120px, 1fr);
+  grid-auto-flow: row dense;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .tile {
@@ -306,27 +413,43 @@ button {
 }
 
 .tile--clock {
-  grid-area: clock;
+  grid-column: span 5;
+  grid-row: span 2;
 }
 
 .tile--cpu {
-  grid-area: cpu;
+  grid-column: span 7;
+  grid-row: span 2;
+}
+
+.tile--gpu {
+  grid-column: span 6;
+  grid-row: span 2;
 }
 
 .tile--mem {
-  grid-area: mem;
+  grid-column: span 4;
+  grid-row: span 2;
 }
 
 .tile--disk {
-  grid-area: disk;
+  grid-column: span 4;
+  grid-row: span 2;
 }
 
 .tile--net {
-  grid-area: net;
+  grid-column: span 4;
+  grid-row: span 2;
+}
+
+.tile--media {
+  grid-column: span 4;
+  grid-row: span 2;
 }
 
 .tile--keys {
-  grid-area: keys;
+  grid-column: span 12;
+  grid-row: span 2;
 }
 
 .tile-head {
@@ -565,6 +688,138 @@ button {
 
 .bar + .tile-sub {
   margin-top: 8px;
+}
+
+/* ---------- 多磁盘 / GPU ---------- */
+.disk-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.disk-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.disk-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.disk-mount {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.disk-size {
+  margin-left: auto;
+}
+
+.disk-pct.warn {
+  color: var(--warn);
+}
+
+.disk-pct.danger {
+  color: var(--danger);
+}
+
+.disk-item .bar {
+  height: 6px;
+}
+
+.gpu-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- 媒体 ---------- */
+.media-track {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-top: 6px;
+}
+
+.media-title {
+  font-size: clamp(13px, 1.5vw, 17px);
+  font-weight: 600;
+}
+
+.media-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.media-track.is-empty .media-title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.media-controls {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.media-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text);
+  background: var(--tile-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.media-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--key-hover);
+}
+
+.media-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.media-btn.pending {
+  color: var(--warn);
+  border-color: var(--pending-line);
+}
+
+.media-btn.ok {
+  color: var(--brand);
+  border-color: var(--brand-line-strong);
+}
+
+.media-btn.error {
+  color: var(--danger);
+  border-color: var(--danger-line-strong);
+}
+
+.media-btn--gap {
+  margin-left: auto;
 }
 
 /* ---------- 网络 ---------- */
@@ -971,19 +1226,25 @@ button {
 @media (orientation: portrait) {
   .grid {
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(6, auto);
-    grid-template-areas:
-      "clock"
-      "cpu"
-      "mem"
-      "disk"
-      "net"
-      "keys";
+    grid-template-rows: none;
+    grid-auto-rows: auto;
     align-content: start;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
     padding-bottom: 4px;
+  }
+
+  .tile--clock,
+  .tile--cpu,
+  .tile--gpu,
+  .tile--mem,
+  .tile--disk,
+  .tile--net,
+  .tile--media,
+  .tile--keys {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .tile--clock {
@@ -996,7 +1257,9 @@ button {
 
   .tile--mem,
   .tile--disk,
-  .tile--net {
+  .tile--net,
+  .tile--gpu,
+  .tile--media {
     min-height: 124px;
   }
 
@@ -1017,12 +1280,21 @@ button {
 @media (orientation: portrait) and (min-width: 620px) {
   .grid {
     grid-template-columns: repeat(2, 1fr);
-    grid-template-areas:
-      "clock clock"
-      "cpu cpu"
-      "mem disk"
-      "net net"
-      "keys keys";
+    grid-auto-rows: auto;
+  }
+
+  .tile--clock,
+  .tile--cpu,
+  .tile--gpu,
+  .tile--keys {
+    grid-column: span 2;
+  }
+
+  .tile--mem,
+  .tile--disk,
+  .tile--net,
+  .tile--media {
+    grid-column: span 1;
   }
 
   .tile--clock {
@@ -1076,11 +1348,39 @@ button {
   .grid {
     gap: 6px;
     grid-template-columns: repeat(2, 1fr);
-    grid-template-rows: repeat(3, 1fr);
-    grid-template-areas:
-      "clock cpu"
-      "mem disk"
-      "net keys";
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: minmax(0, 1fr);
+  }
+
+  .tile--clock,
+  .tile--cpu,
+  .tile--gpu,
+  .tile--mem,
+  .tile--disk,
+  .tile--net,
+  .tile--media,
+  .tile--keys {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+
+  .install-hint {
+    display: none;
+  }
+
+  .page-nav {
+    gap: 2px;
+  }
+
+  .page-arrow {
+    width: 22px;
+    height: 22px;
+    font-size: 12px;
+  }
+
+  .page-dot {
+    width: 20px;
+    height: 20px;
   }
 
   .tile {
@@ -1422,6 +1722,54 @@ button {
   background: var(--tile);
   border: 1px dashed var(--line);
   border-radius: 12px;
+}
+
+.admin-section-title {
+  margin: 14px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.admin-components {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-top: 2px;
+}
+
+.admin-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.admin-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+}
+
+.admin-check input:disabled {
+  cursor: not-allowed;
+}
+
+.admin-footer--inline {
+  padding-top: 0;
+}
+
+.admin-savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 10px 0 2px;
+  background: linear-gradient(transparent, var(--bg) 35%);
+}
+
+.admin-savebar .btn.primary {
+  margin-left: auto;
 }
 
 .admin-alert {

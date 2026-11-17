@@ -1,9 +1,21 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const CONFIG_VERSION = 1
+export const CONFIG_VERSION = 2
 export const ICON_NAMES = ['terminal', 'folder', 'code', 'globe', 'lock']
 export const ACTION_KINDS = ['app', 'url', 'lock']
+export const COMPONENT_IDS = ['clock', 'cpu', 'gpu', 'memory', 'disk', 'network', 'media', 'shortcuts']
+export const MAX_PAGES = 5
+
+export const DEFAULT_LAYOUT = {
+  pages: [
+    {
+      id: 'main',
+      name: '主页',
+      components: ['clock', 'cpu', 'memory', 'disk', 'network', 'shortcuts'],
+    },
+  ],
+}
 
 export const DEFAULT_ACTIONS = [
   { id: 'terminal', kind: 'app', label: '终端', icon: 'terminal', target: 'wt.exe', args: [], enabled: true },
@@ -91,11 +103,59 @@ function normalizeAction(raw, index, strict, errors, taken) {
   }
 }
 
+function cloneDefaultLayout() {
+  return {
+    pages: DEFAULT_LAYOUT.pages.map((page) => ({ ...page, components: [...page.components] })),
+  }
+}
+
+function normalizeLayout(raw, strict, errors) {
+  if (raw == null) return cloneDefaultLayout()
+  if (!isObject(raw) || !Array.isArray(raw.pages) || raw.pages.length === 0) {
+    if (strict) errors.push('布局缺少页面')
+    return cloneDefaultLayout()
+  }
+  if (raw.pages.length > MAX_PAGES && strict) errors.push(`最多只能有 ${MAX_PAGES} 个页面`)
+
+  const taken = new Set()
+  const pages = []
+  raw.pages.slice(0, MAX_PAGES).forEach((page, index) => {
+    const where = `第 ${index + 1} 个页面`
+    if (!isObject(page)) {
+      if (strict) errors.push(`${where}格式不正确`)
+      return
+    }
+    const name = typeof page.name === 'string' ? page.name.trim().slice(0, 12) : ''
+    if (!name && strict) errors.push(`${where}缺少名称`)
+
+    const rawComponents = Array.isArray(page.components) ? page.components : []
+    const components = rawComponents.filter((id) => COMPONENT_IDS.includes(id))
+    const unique = [...new Set(components)]
+    if (!unique.length) {
+      if (strict) errors.push(`${where}至少需要一个组件`)
+      return
+    }
+    if (strict && components.length !== rawComponents.length) errors.push(`${where}包含未知组件`)
+
+    let id = typeof page.id === 'string' ? page.id.trim() : ''
+    if (!ID_PATTERN.test(id) || taken.has(id)) id = `page_${Date.now().toString(36)}${pages.length}`
+    taken.add(id)
+
+    pages.push({ id, name: name || `页面 ${index + 1}`, components: unique })
+  })
+
+  if (!pages.length) {
+    if (strict) errors.push('至少需要一个有效页面')
+    return cloneDefaultLayout()
+  }
+  return { pages }
+}
+
 export function normalizeConfig(raw, { strict = false } = {}) {
   const errors = []
   if (!isObject(raw) || !Array.isArray(raw.actions)) {
     if (strict) errors.push('配置缺少动作列表')
-    return { config: { version: CONFIG_VERSION, actions: cloneDefaults() }, errors }
+    return { config: { version: CONFIG_VERSION, actions: cloneDefaults(), layout: cloneDefaultLayout() }, errors }
   }
 
   const taken = new Set()
@@ -105,7 +165,8 @@ export function normalizeConfig(raw, { strict = false } = {}) {
     if (action) actions.push(action)
   })
 
-  return { config: { version: CONFIG_VERSION, actions }, errors }
+  const layout = normalizeLayout(raw.layout, strict, errors)
+  return { config: { version: CONFIG_VERSION, actions, layout }, errors }
 }
 
 function cloneDefaults() {
@@ -114,7 +175,7 @@ function cloneDefaults() {
 
 export function loadConfig(file, { warn = () => {} } = {}) {
   const fallback = () => {
-    const config = { version: CONFIG_VERSION, actions: cloneDefaults() }
+    const config = { version: CONFIG_VERSION, actions: cloneDefaults(), layout: cloneDefaultLayout() }
     saveConfig(file, config)
     return config
   }
@@ -174,4 +235,10 @@ export function publicActions(config) {
 export function findAction(config, id) {
   if (typeof id !== 'string') return null
   return config.actions.find((action) => action.id === id && action.enabled) || null
+}
+
+export function publicLayout(config) {
+  return {
+    pages: config.layout.pages.map(({ id, name, components }) => ({ id, name, components: [...components] })),
+  }
 }

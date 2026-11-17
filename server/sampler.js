@@ -1,16 +1,37 @@
 import fs from 'node:fs'
 import os from 'node:os'
-import si from 'systeminformation'
+import { execFile } from 'node:child_process'
 
-// CPU / 内存 / 磁盘走 Node 原生接口，1s 采样近乎零开销；
-// 网络统计在 Windows 上只能靠 WMI，单独在后台异步轮询并自行算差值。
-export function createSampler({ networkIntervalMs = 3000 } = {}) {
+const DRIVE_LETTERS = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+function toNumber(value) {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+function runPowerShell(script, timeout = 8000) {
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout },
+      (err, stdout) => resolve(err ? '' : String(stdout || ''))
+    )
+  })
+}
+
+// CPU / 内存走 Node 原生接口，1 分钟一次近乎零开销；
+// WMI 类接口在这类机器上单次可能耗时数十秒，因此只用轻量的 statfs、nvidia-smi 和网络计数器。
+export function createSampler({ networkIntervalMs = 30000, hardwareIntervalMs = 60000 } = {}) {
   let prevCpu = null
   let netPrev = null
   let netRate = { rx: 0, tx: 0 }
   let diskCache = { mount: 'C:', used: 0, size: 0 }
+  let diskList = null
   let diskAt = 0
+  let hardware = { gpu: null, temp: null, processCount: null }
   let netTimer = null
+  let hardwareTimer = null
 
   function readCpu() {
     const snapshot = os.cpus().map((c) => {
@@ -65,32 +86,93 @@ export function createSampler({ networkIntervalMs = 3000 } = {}) {
     return diskCache
   }
 
-  async function pollNetwork() {
+  async function refreshDisks() {
+    const found = await Promise.all(
+      DRIVE_LETTERS.map(async (letter) => {
+        try {
+          const st = await fs.promises.statfs(`${letter}:\\`)
+          const size = st.blocks * st.bsize
+          if (!size) return null
+          return { mount: `${letter}:`, size, used: size - st.bavail * st.bsize }
+        } catch {
+          return null
+        }
+      })
+    )
+    const disks = found.filter(Boolean)
+    if (disks.length) diskList = disks
+  }
+
+  async function refreshNetwork() {
+    const output = await runPowerShell(
+      'Get-NetAdapterStatistics | Sort-Object ReceivedBytes -Descending | Select-Object -First 1 ReceivedBytes,SentBytes | ConvertTo-Json -Compress'
+    )
+    if (!output.trim()) return
     try {
-      const list = await si.networkStats()
-      const nic = list.find((n) => n.operstate === 'up' && n.rx_bytes > 0) || list[0]
-      if (!nic) return
+      const data = JSON.parse(output)
+      const rx = Number(data.ReceivedBytes)
+      const tx = Number(data.SentBytes)
+      if (!Number.isFinite(rx) || !Number.isFinite(tx)) return
       const now = Date.now()
-      if (netPrev && netPrev.iface === nic.iface) {
+      if (netPrev) {
         const dt = (now - netPrev.t) / 1000
         if (dt > 0) {
           netRate = {
-            rx: Math.max(0, Math.round((nic.rx_bytes - netPrev.rx) / dt)),
-            tx: Math.max(0, Math.round((nic.tx_bytes - netPrev.tx) / dt)),
+            rx: Math.max(0, Math.round((rx - netPrev.rx) / dt)),
+            tx: Math.max(0, Math.round((tx - netPrev.tx) / dt)),
           }
         }
       }
-      netPrev = { iface: nic.iface, rx: nic.rx_bytes, tx: nic.tx_bytes, t: now }
+      netPrev = { rx, tx, t: now }
     } catch {
-      /* 忽略：部分网卡读不到统计 */
+      /* 输出不是合法 JSON 时忽略本次刷新 */
     }
+  }
+
+  function refreshGpu() {
+    return new Promise((resolve) => {
+      execFile(
+        'nvidia-smi',
+        [
+          '--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu',
+          '--format=csv,noheader,nounits',
+        ],
+        { windowsHide: true, timeout: 5000 },
+        (err, stdout) => {
+          if (err || !String(stdout).trim()) {
+            resolve()
+            return
+          }
+          const [model, utilization, memoryUsed, memoryTotal, temperature] = String(stdout)
+            .trim()
+            .split('\n')[0]
+            .split(',')
+            .map((item) => item.trim())
+          hardware.gpu = model
+            ? {
+                model,
+                vendor: 'NVIDIA',
+                utilization: toNumber(utilization),
+                memoryUsed: (toNumber(memoryUsed) ?? 0) * 1024 * 1024,
+                memoryTotal: (toNumber(memoryTotal) ?? 0) * 1024 * 1024,
+                temperature: toNumber(temperature),
+              }
+            : null
+          resolve()
+        }
+      )
+    })
+  }
+
+  async function refreshHardware() {
+    await Promise.all([refreshDisks(), refreshGpu()])
   }
 
   function startNetworkPolling() {
     if (netTimer) return
     netPrev = null
-    pollNetwork()
-    netTimer = setInterval(pollNetwork, networkIntervalMs)
+    refreshNetwork()
+    netTimer = setInterval(refreshNetwork, networkIntervalMs)
   }
 
   function stopNetworkPolling() {
@@ -98,6 +180,17 @@ export function createSampler({ networkIntervalMs = 3000 } = {}) {
     netTimer = null
     netPrev = null
     netRate = { rx: 0, tx: 0 }
+  }
+
+  function startHardwarePolling() {
+    if (hardwareTimer) return
+    refreshHardware()
+    hardwareTimer = setInterval(refreshHardware, hardwareIntervalMs)
+  }
+
+  function stopHardwarePolling() {
+    clearInterval(hardwareTimer)
+    hardwareTimer = null
   }
 
   function reset() {
@@ -116,11 +209,23 @@ export function createSampler({ networkIntervalMs = 3000 } = {}) {
       memUsed: os.totalmem() - os.freemem(),
       memTotal: os.totalmem(),
       disk,
+      disks: diskList || [disk],
+      gpu: hardware.gpu,
+      temp: hardware.temp,
+      processCount: hardware.processCount,
       rx: netRate.rx,
       tx: netRate.tx,
       uptime: os.uptime(),
     }
   }
 
-  return { sample, readDisk, startNetworkPolling, stopNetworkPolling, reset }
+  return {
+    sample,
+    readDisk,
+    startNetworkPolling,
+    stopNetworkPolling,
+    startHardwarePolling,
+    stopHardwarePolling,
+    reset,
+  }
 }

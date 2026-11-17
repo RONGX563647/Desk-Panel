@@ -82,6 +82,43 @@ test('缺少配置文件时自动生成默认配置', () => {
   const config = loadConfig(file)
 
   assert.equal(config.actions.length, 5)
+  assert.equal(config.layout.pages.length, 1)
+  assert.ok(config.layout.pages[0].components.includes('shortcuts'))
   assert.ok(fs.existsSync(file))
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('严格保存时校验页面布局', () => {
+  const { dir, file } = tempFile()
+  const base = { version: 2, actions: [] }
+
+  assert.throws(
+    () => saveConfig(file, { ...base, layout: { pages: [] } }),
+    /布局缺少页面/
+  )
+  assert.throws(
+    () => saveConfig(file, { ...base, layout: { pages: [{ name: '空页', components: [] }] } }),
+    /至少需要一个组件/
+  )
+  assert.throws(
+    () =>
+      saveConfig(file, {
+        ...base,
+        layout: { pages: [{ name: '非法', components: ['cpu', 'unknown'] }] },
+      }),
+    /未知组件/
+  )
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('布局页面数量限制为 5 个', () => {
+  const { dir, file } = tempFile()
+  const page = { name: '页', components: ['clock'] }
+  const pages = Array.from({ length: 6 }, () => ({ ...page }))
+
+  assert.throws(
+    () => saveConfig(file, { version: 2, actions: [], layout: { pages } }),
+    /最多只能有 5 个页面/
+  )
   fs.rmSync(dir, { recursive: true, force: true })
 })
