@@ -35,3 +35,43 @@ export function formatRate(n) {
 export function toGB(bytes) {
   return Number.isFinite(bytes) ? bytes / 1024 ** 3 : null
 }
+
+export const COMPONENT_SPANS = {
+  clock: 5,
+  cpu: 7,
+  gpu: 6,
+  memory: 4,
+  disk: 4,
+  network: 4,
+  media: 4,
+  shortcuts: 12,
+}
+
+// 按 12 列基准打包组件，行内按权重伸展自动占满整行
+export function packRows(components) {
+  const rows = []
+  let current = []
+  let used = 0
+  for (const id of components) {
+    const span = COMPONENT_SPANS[id] || 4
+    if (used > 0 && used + span > 12) {
+      rows.push(current)
+      current = []
+      used = 0
+    }
+    current.push({ id, span })
+    used += span
+    if (used >= 12) {
+      rows.push(current)
+      current = []
+      used = 0
+    }
+  }
+  if (current.length) rows.push(current)
+  return rows
+}
+
+export function wrapPage(current, delta, total) {
+  if (!Number.isInteger(total) || total <= 0) return 0
+  return (((current + delta) % total) + total) % total
+}

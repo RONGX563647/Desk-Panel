@@ -18,7 +18,6 @@
   --hover-strong: rgba(255, 255, 255, 0.06);
   --key-hover: #111922;
   --skeleton-hi: #18222c;
-  --overlay: rgba(11, 15, 20, 0.86);
   --toast-bg: rgba(20, 27, 36, 0.97);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   --tile-shadow: none;
@@ -58,7 +57,6 @@
   --hover-strong: rgba(15, 23, 42, 0.07);
   --key-hover: #f7fafc;
   --skeleton-hi: #f6f9fc;
-  --overlay: rgba(238, 241, 245, 0.9);
   --toast-bg: rgba(255, 255, 255, 0.98);
   --shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
   --tile-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 18px rgba(15, 23, 42, 0.04);
@@ -272,6 +270,28 @@ button {
   padding: 5px 10px;
 }
 
+.net-hint--offline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.net-hint-action {
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.net-hint-action:hover {
+  background: var(--warn-dim);
+}
+
 /* ---------- 安装提示 ---------- */
 .install-hint {
   flex: 0 0 auto;
@@ -313,87 +333,35 @@ button {
   font-size: 11px;
 }
 
-/* ---------- 页面切换 ---------- */
-.page-nav {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.page-arrow {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.page-arrow:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--line-strong);
-}
-
-.page-arrow:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.page-dot {
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.page-dot::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--line-strong);
-  transition: background-color 0.2s ease, transform 0.2s ease;
-}
-
-.page-dot.active::before {
-  background: var(--brand);
-  transform: scale(1.35);
-}
-
-.page-dot:focus-visible,
-.page-arrow:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-  border-radius: 50%;
-}
-
 /* ---------- 网格 ---------- */
 .grid {
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--gap);
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-rows: repeat(6, minmax(0, 1fr));
-  grid-auto-rows: minmax(120px, 1fr);
-  grid-auto-flow: row dense;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.grid-row {
+  flex: 1 1 0;
+  min-height: 130px;
+  display: flex;
+  gap: var(--gap);
+}
+
+.grid-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.grid-cell > .tile {
+  flex: 1 1 auto;
 }
 
 .tile {
@@ -412,44 +380,14 @@ button {
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
-.tile--clock {
-  grid-column: span 5;
-  grid-row: span 2;
-}
-
-.tile--cpu {
-  grid-column: span 7;
-  grid-row: span 2;
-}
-
-.tile--gpu {
-  grid-column: span 6;
-  grid-row: span 2;
-}
-
-.tile--mem {
-  grid-column: span 4;
-  grid-row: span 2;
-}
-
-.tile--disk {
-  grid-column: span 4;
-  grid-row: span 2;
-}
-
-.tile--net {
-  grid-column: span 4;
-  grid-row: span 2;
-}
-
-.tile--media {
-  grid-column: span 4;
-  grid-row: span 2;
-}
-
+.tile--clock,
+.tile--cpu,
+.tile--mem,
+.tile--disk,
+.tile--net,
+.tile--media,
 .tile--keys {
-  grid-column: span 12;
-  grid-row: span 2;
+  min-width: 0;
 }
 
 .tile-head {
@@ -1068,50 +1006,6 @@ button {
   border-radius: 50%;
 }
 
-/* ---------- 覆盖层 ---------- */
-.overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--overlay);
-}
-
-.overlay-card {
-  width: min(360px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 22px 24px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--muted);
-  background: var(--tile);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-}
-
-.overlay-card strong {
-  color: var(--text);
-  font-size: 16px;
-}
-
-.overlay-meta {
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.overlay-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 8px;
-}
-
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1225,26 +1119,21 @@ button {
 /* ---------- 竖屏 ---------- */
 @media (orientation: portrait) {
   .grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
-    grid-auto-rows: auto;
-    align-content: start;
+    display: flex;
+    flex-direction: column;
+    align-content: stretch;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
     padding-bottom: 4px;
   }
 
-  .tile--clock,
-  .tile--cpu,
-  .tile--gpu,
-  .tile--mem,
-  .tile--disk,
-  .tile--net,
-  .tile--media,
-  .tile--keys {
-    grid-column: auto;
-    grid-row: auto;
+  .grid-row {
+    display: contents;
+  }
+
+  .grid-cell {
+    flex: 0 0 auto;
   }
 
   .tile--clock {
@@ -1279,21 +1168,26 @@ button {
 /* 平板竖屏：两列 */
 @media (orientation: portrait) and (min-width: 620px) {
   .grid {
-    grid-template-columns: repeat(2, 1fr);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-auto-rows: auto;
   }
 
-  .tile--clock,
-  .tile--cpu,
-  .tile--gpu,
-  .tile--keys {
+  .grid-row {
+    display: contents;
+  }
+
+  .grid-cell--clock,
+  .grid-cell--cpu,
+  .grid-cell--gpu,
+  .grid-cell--shortcuts {
     grid-column: span 2;
   }
 
-  .tile--mem,
-  .tile--disk,
-  .tile--net,
-  .tile--media {
+  .grid-cell--memory,
+  .grid-cell--disk,
+  .grid-cell--network,
+  .grid-cell--media {
     grid-column: span 1;
   }
 
@@ -1347,40 +1241,15 @@ button {
 
   .grid {
     gap: 6px;
-    grid-template-columns: repeat(2, 1fr);
-    grid-template-rows: repeat(3, minmax(0, 1fr));
-    grid-auto-rows: minmax(0, 1fr);
   }
 
-  .tile--clock,
-  .tile--cpu,
-  .tile--gpu,
-  .tile--mem,
-  .tile--disk,
-  .tile--net,
-  .tile--media,
-  .tile--keys {
-    grid-column: span 1;
-    grid-row: span 1;
+  .grid-row {
+    gap: 6px;
+    min-height: 110px;
   }
 
   .install-hint {
     display: none;
-  }
-
-  .page-nav {
-    gap: 2px;
-  }
-
-  .page-arrow {
-    width: 22px;
-    height: 22px;
-    font-size: 12px;
-  }
-
-  .page-dot {
-    width: 20px;
-    height: 20px;
   }
 
   .tile {
@@ -1492,13 +1361,8 @@ button {
   .keys-alert button {
     font-size: 8.5px;
   }
-
-  .overlay-card {
-    padding: 16px 18px;
-  }
 }
 
-/* 窄屏：顶栏只保留必要信息 */
 @media (max-width: 520px) {
   .host,
   .pill {

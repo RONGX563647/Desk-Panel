@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePanel } from './usePanel.js'
 import { Clock, Cpu, Disk, Gpu, Media, Memory, Network, Shortcuts } from './widgets.jsx'
 import InstallHint from './InstallHint.jsx'
-import { CloseIcon, FullscreenIcon, RefreshIcon, SunIcon, ThemeIcon } from './icons.jsx'
-import { formatClock, formatUptime } from './utils.js'
+import { CloseIcon, FullscreenIcon, SunIcon, ThemeIcon } from './icons.jsx'
+import { formatClock, formatUptime, packRows, wrapPage } from './utils.js'
 
 const STATUS_TEXT = {
   connecting: '连接中',
@@ -27,7 +27,6 @@ export default function App() {
   const [actionStates, setActionStates] = useState({})
   const [mediaStates, setMediaStates] = useState({})
   const [activePage, setActivePage] = useState(0)
-  const [offlineDismissed, setOfflineDismissed] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(() => !!document.fullscreenElement)
   const [wake, setWake] = useState(false)
   const [theme, setTheme] = useState(() => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'))
@@ -308,14 +307,9 @@ export default function App() {
   }, [attachWake, pushToast])
 
   const retry = useCallback(() => {
-    setOfflineDismissed(false)
     reconnect()
     pushToast('info', '正在重新连接…')
   }, [pushToast, reconnect])
-
-  useEffect(() => {
-    if (status !== 'offline') setOfflineDismissed(false)
-  }, [status])
 
   const displayLabel = wake
     ? isFullscreen
@@ -324,7 +318,6 @@ export default function App() {
     : isFullscreen
       ? '全屏中'
       : '全屏常亮'
-  const lastSeen = lastUpdate ? formatClock(lastUpdate) : '尚未收到数据'
   const themeLabel = theme === 'light' ? '白色主题' : '深色主题'
   const themeAction = theme === 'light' ? '切换到深色主题' : '切换到白色极客主题'
 
@@ -334,6 +327,7 @@ export default function App() {
   }, [layout])
   const pageIndex = Math.min(activePage, pages.length - 1)
   const page = pages[pageIndex]
+  const rows = useMemo(() => packRows(page.components), [page])
 
   useEffect(() => {
     setActivePage((prev) => Math.min(prev, pages.length - 1))
@@ -341,10 +335,7 @@ export default function App() {
 
   const changePage = useCallback(
     (delta) => {
-      setActivePage((prev) => {
-        const next = prev + delta
-        return next < 0 || next >= pages.length ? prev : next
-      })
+      setActivePage((prev) => wrapPage(Math.min(prev, pages.length - 1), delta, pages.length))
     },
     [pages.length]
   )
@@ -456,47 +447,20 @@ export default function App() {
         </div>
       </header>
 
-      {status === 'weak' ? (
+      {status === 'offline' ? (
+        <div className="net-hint net-hint--offline" role="status">
+          <span>连接已断开 · 正在自动重连</span>
+          <button type="button" className="net-hint-action" onClick={retry}>
+            立即重试
+          </button>
+        </div>
+      ) : status === 'weak' ? (
         <div className="net-hint" role="status">
           数据延迟 · 最后更新 {lastUpdate ? formatClock(lastUpdate) : '--'}
         </div>
       ) : null}
 
       <InstallHint />
-
-      {pages.length > 1 ? (
-        <nav className="page-nav" aria-label="页面切换">
-          <button
-            type="button"
-            className="page-arrow"
-            onClick={() => changePage(-1)}
-            disabled={pageIndex === 0}
-            aria-label="上一页"
-          >
-            ‹
-          </button>
-          {pages.map((item, index) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`page-dot ${index === pageIndex ? 'active' : ''}`}
-              onClick={() => setActivePage(index)}
-              aria-label={item.name}
-              aria-current={index === pageIndex ? 'page' : undefined}
-              title={item.name}
-            />
-          ))}
-          <button
-            type="button"
-            className="page-arrow"
-            onClick={() => changePage(1)}
-            disabled={pageIndex === pages.length - 1}
-            aria-label="下一页"
-          >
-            ›
-          </button>
-        </nav>
-      ) : null}
 
       <main
         className="grid"
@@ -506,32 +470,16 @@ export default function App() {
           swipeRef.current = null
         }}
       >
-        {page.components.map(renderWidget)}
-      </main>
-
-      {status === 'offline' && !offlineDismissed ? (
-        <div className="overlay" role="alertdialog" aria-labelledby="offline-title">
-          <div className="overlay-card">
-            <strong id="offline-title">连接已断开</strong>
-            <span>请确认电脑端代理仍在运行，或检查手机与电脑是否在同一网络。</span>
-            <span className="overlay-meta">最后更新：{lastSeen}</span>
-            <div className="overlay-actions">
-              <button type="button" className="btn primary" onClick={retry}>
-                <RefreshIcon size={15} />
-                重试连接
-              </button>
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={() => setOfflineDismissed(true)}
-                disabled={!metrics}
-              >
-                查看缓存数据
-              </button>
-            </div>
+        {rows.map((row, rowIndex) => (
+          <div className="grid-row" key={`${row[0]?.id || 'row'}-${rowIndex}`}>
+            {row.map(({ id, span }) => (
+              <div className={`grid-cell grid-cell--${id}`} key={id} style={{ flexGrow: span }}>
+                {renderWidget(id)}
+              </div>
+            ))}
           </div>
-        </div>
-      ) : null}
+        ))}
+      </main>
 
       <div className="toasts" aria-live="polite">
         {toasts.map((toast) => (
