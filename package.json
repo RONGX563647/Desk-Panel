@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"node server/index.js\" \"vite\"",
     "build": "vite build",
+    "test": "node --test",
     "start": "node server/index.js",
     "serve": "npm run build && node server/index.js"
   },

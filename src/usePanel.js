@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 export function usePanel() {
   const [metrics, setMetrics] = useState(null)
   const [info, setInfo] = useState(null)
+  const [actions, setActions] = useState([])
   const [status, setStatus] = useState('connecting')
   const [lastUpdate, setLastUpdate] = useState(0)
 
@@ -52,7 +53,11 @@ export function usePanel() {
       } catch {
         return
       }
-      if (msg.t === 'hello') setInfo(msg.info)
+      if (msg.t === 'hello') {
+        setInfo(msg.info)
+        if (Array.isArray(msg.actions)) setActions(msg.actions)
+      }
+      if (msg.t === 'config' && Array.isArray(msg.actions)) setActions(msg.actions)
       if (msg.t === 'metrics') {
         lastMsgRef.current = Date.now()
         setLastUpdate(lastMsgRef.current)
@@ -127,5 +132,5 @@ export function usePanel() {
     connect()
   }, [connect])
 
-  return { metrics, info, status, lastUpdate, reconnect }
+  return { metrics, info, actions, status, lastUpdate, reconnect }
 }

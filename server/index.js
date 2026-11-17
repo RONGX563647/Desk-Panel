@@ -1,58 +1,27 @@
 import express from 'express'
 import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
-import si from 'systeminformation'
-import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { findAction, loadConfig, publicActions, saveConfig } from './config.js'
+import { createActionRunner } from './actions.js'
+import { createSampler } from './sampler.js'
+import { createLogger } from './logger.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
 const PORT = Number(process.env.PORT || 8787)
 const TOKEN = process.env.PANEL_TOKEN || ''
+const DATA_DIR = path.join(ROOT, 'data')
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json')
+const LOG_FILE = path.join(DATA_DIR, 'panel.log')
 
-// 动作白名单：客户端只传 ID，命令本身永远不出本机
-const ACTIONS = {
-  terminal: () => spawn('wt.exe', [], { detached: true, stdio: 'ignore' }),
-  explorer: () => spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }),
-  vscode: () => spawn('code', [], { detached: true, stdio: 'ignore', shell: true }),
-  browser: () => spawn('cmd', ['/c', 'start', '', 'https://github.com'], { detached: true, stdio: 'ignore', windowsHide: true }),
-  lock: () => spawn('rundll32.exe', ['user32.dll,LockWorkStation'], { detached: true, stdio: 'ignore' }),
-}
-
-function runAction(id) {
-  const fn = ACTIONS[id]
-  if (!fn) return Promise.reject(new Error(`未知动作: ${id}`))
-  return new Promise((resolve, reject) => {
-    let child
-    try {
-      child = fn()
-    } catch (err) {
-      reject(err)
-      return
-    }
-
-    let settled = false
-    const finish = (err) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (err) reject(err)
-      else {
-        child.unref()
-        resolve()
-      }
-    }
-    const timer = setTimeout(() => finish(new Error('启动超时，请检查目标程序')), 5000)
-
-    child.once('spawn', () => finish())
-    child.once('error', (err) =>
-      finish(err.code === 'ENOENT' ? new Error('未找到目标程序，请检查是否已安装') : err)
-    )
-  })
-}
+const logger = createLogger(LOG_FILE)
+let config = loadConfig(CONFIG_FILE, { warn: (message) => logger.warn(message) })
+const runAction = createActionRunner()
+const sampler = createSampler()
 
 const app = express()
 app.use(express.json())
@@ -62,6 +31,11 @@ function authorized(req) {
   const fromQuery = req.query.token
   const fromHeader = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
   return fromQuery === TOKEN || fromHeader === TOKEN
+}
+
+function isLocalRequest(req) {
+  const ip = req.socket.remoteAddress || ''
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
 }
 
 const info = {
@@ -80,11 +54,38 @@ app.get('/api/info', (req, res) => {
 app.post('/api/action', async (req, res) => {
   if (!authorized(req)) return res.status(401).json({ error: 'unauthorized' })
   const { id } = req.body || {}
+  const action = findAction(config, id)
+  if (!action) return res.status(404).json({ ok: false, error: '动作不存在或已停用' })
+
   try {
-    await runAction(id)
+    await runAction(action)
+    logger.info(`动作已执行：${action.label}（${action.id}）`)
     res.json({ ok: true, id })
   } catch (err) {
+    logger.warn(`动作失败：${action.label}（${action.id}） ${err.message}`)
     res.status(400).json({ ok: false, error: err.message })
+  }
+})
+
+// 设置接口只对本机开放，避免局域网设备直接修改动作配置
+app.use('/api/admin', (req, res, next) => {
+  if (!isLocalRequest(req)) return res.status(403).json({ ok: false, error: '设置页仅支持本机访问' })
+  next()
+})
+
+app.get('/api/admin/config', (req, res) => {
+  res.json({ ok: true, config, localOnly: true })
+})
+
+app.put('/api/admin/config', (req, res) => {
+  try {
+    config = saveConfig(CONFIG_FILE, req.body)
+    logger.info(`动作配置已保存，共 ${config.actions.length} 个动作`)
+    broadcast({ t: 'config', actions: publicActions(config) })
+    res.json({ ok: true, config })
+  } catch (err) {
+    logger.warn(`动作配置保存失败：${err.message}`)
+    res.status(400).json({ ok: false, error: err.message, errors: err.errors || [] })
   }
 })
 
@@ -116,124 +117,10 @@ if (fs.existsSync(DIST)) {
   )
 }
 
-// ---------- 采集 ----------
-// CPU / 内存 / 磁盘走 Node 原生接口，1s 采样近乎零开销；
-// 网络统计在 Windows 上只能靠 WMI，单独在后台异步轮询并自行算差值。
-let prevCpu = null
-let netPrev = null
-let netRate = { rx: 0, tx: 0 }
-let diskCache = { mount: 'C:', used: 0, size: 0 }
-let diskAt = 0
-let netTimer = null
-let latest = null
-
-function readCpu() {
-  const snapshot = os.cpus().map((c) => {
-    const t = c.times
-    return { idle: t.idle, total: t.user + t.nice + t.sys + t.idle + t.irq }
-  })
-
-  // 第一次采样没有可比较的基准，返回 null 让前端显示 "--"，避免误报 0%
-  if (!prevCpu) {
-    prevCpu = snapshot
-    return { load: null, cores: Array(snapshot.length).fill(null) }
-  }
-
-  const cores = []
-  let totalDelta = 0
-  let idleDelta = 0
-
-  for (let i = 0; i < snapshot.length; i++) {
-    const prev = prevCpu[i]
-    if (!prev) {
-      cores.push(null)
-      continue
-    }
-    const dTotal = snapshot[i].total - prev.total
-    const dIdle = snapshot[i].idle - prev.idle
-    if (dTotal <= 0) {
-      cores.push(null)
-      continue
-    }
-    cores.push(Math.max(0, Math.min(100, Math.round((1 - dIdle / dTotal) * 100))))
-    totalDelta += dTotal
-    idleDelta += dIdle
-  }
-
-  prevCpu = snapshot
-  const load = totalDelta > 0 ? Math.round((1 - idleDelta / totalDelta) * 100) : 0
-  return { load, cores }
-}
-
-function readDisk(force = false) {
-  const now = Date.now()
-  if (!force && now - diskAt < 10000) return diskCache
-  try {
-    const st = fs.statfsSync('C:\\')
-    const size = st.blocks * st.bsize
-    const free = st.bavail * st.bsize
-    diskCache = { mount: 'C:', size, used: size - free }
-    diskAt = now
-  } catch {
-    /* 读不到就沿用上一次的值 */
-  }
-  return diskCache
-}
-
-function startNetworkPolling() {
-  if (netTimer) return
-  netPrev = null
-  pollNetwork()
-  netTimer = setInterval(pollNetwork, 3000)
-}
-
-function stopNetworkPolling() {
-  clearInterval(netTimer)
-  netTimer = null
-  netPrev = null
-  netRate = { rx: 0, tx: 0 }
-}
-
-async function pollNetwork() {
-  try {
-    const list = await si.networkStats()
-    const nic = list.find((n) => n.operstate === 'up' && n.rx_bytes > 0) || list[0]
-    if (!nic) return
-    const now = Date.now()
-    if (netPrev && netPrev.iface === nic.iface) {
-      const dt = (now - netPrev.t) / 1000
-      if (dt > 0) {
-        netRate = {
-          rx: Math.max(0, Math.round((nic.rx_bytes - netPrev.rx) / dt)),
-          tx: Math.max(0, Math.round((nic.tx_bytes - netPrev.tx) / dt)),
-        }
-      }
-    }
-    netPrev = { iface: nic.iface, rx: nic.rx_bytes, tx: nic.tx_bytes, t: now }
-  } catch {
-    /* 忽略：部分网卡读不到统计 */
-  }
-}
-
-function sample() {
-  const cpu = readCpu()
-  const disk = readDisk()
-  return {
-    ts: Date.now(),
-    cpu: cpu.load,
-    cores: cpu.cores,
-    memUsed: os.totalmem() - os.freemem(),
-    memTotal: os.totalmem(),
-    disk,
-    rx: netRate.rx,
-    tx: netRate.tx,
-    uptime: os.uptime(),
-  }
-}
-
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
 const clients = new Set()
+let latest = null
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://localhost')
@@ -244,24 +131,24 @@ wss.on('connection', (ws, req) => {
   clients.add(ws)
   if (clients.size === 1) {
     // 无客户端期间不采样；首个客户端接入时重建基准并立即给一帧快照
-    prevCpu = null
-    readDisk(true)
+    sampler.reset()
+    sampler.readDisk(true)
     try {
-      latest = sample()
+      latest = sampler.sample()
     } catch (err) {
-      console.error('[sample]', err.message)
+      logger.error(`首次采样失败：${err.message}`)
     }
-    startNetworkPolling()
+    sampler.startNetworkPolling()
   }
-  ws.send(JSON.stringify({ t: 'hello', info, actions: Object.keys(ACTIONS) }))
+  ws.send(JSON.stringify({ t: 'hello', info, actions: publicActions(config) }))
   if (latest) ws.send(JSON.stringify({ t: 'metrics', ...latest }))
   ws.on('close', () => {
     clients.delete(ws)
-    if (clients.size === 0) stopNetworkPolling()
+    if (clients.size === 0) sampler.stopNetworkPolling()
   })
   ws.on('error', () => {
     clients.delete(ws)
-    if (clients.size === 0) stopNetworkPolling()
+    if (clients.size === 0) sampler.stopNetworkPolling()
   })
 })
 
@@ -277,19 +164,20 @@ setInterval(() => {
   if (busy || clients.size === 0) return
   busy = true
   try {
-    latest = sample()
+    latest = sampler.sample()
     broadcast({ t: 'metrics', ...latest })
   } catch (err) {
-    console.error('[sample]', err.message)
+    logger.error(`采样失败：${err.message}`)
   } finally {
     busy = false
   }
 }, 1000)
 
-readDisk(true)
+sampler.readDisk(true)
 
 server.listen(PORT, '0.0.0.0', () => {
   const suffix = TOKEN ? `/?token=${TOKEN}` : '/'
+  logger.info(`服务已启动，端口 ${PORT}`)
   console.log(`\n  Desk Panel 已启动  (端口 ${PORT}${TOKEN ? '，已启用 token' : '，未设置 token'}）`)
   console.log(`  本机:   http://127.0.0.1:${PORT}${suffix}`)
   for (const [name, addrs] of Object.entries(os.networkInterfaces())) {

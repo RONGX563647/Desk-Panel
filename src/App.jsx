@@ -15,7 +15,7 @@ const THEME_KEY = 'panel-theme'
 const THEME_COLOR = { dark: '#0b0f14', light: '#eef1f5' }
 
 export default function App() {
-  const { metrics, info, status, lastUpdate, reconnect } = usePanel()
+  const { metrics, info, actions, status, lastUpdate, reconnect } = usePanel()
   const [toasts, setToasts] = useState([])
   const [actionStates, setActionStates] = useState({})
   const [offlineDismissed, setOfflineDismissed] = useState(false)
@@ -301,7 +301,7 @@ export default function App() {
         <Memory used={metrics?.memUsed} total={metrics?.memTotal} ready={ready} />
         <Disk disk={metrics?.disk} ready={ready} />
         <Network rx={metrics?.rx} tx={metrics?.tx} ts={metrics?.ts} ready={ready} />
-        <Shortcuts states={actionStates} onAction={runAction} onClearError={clearActionError} />
+        <Shortcuts actions={actions} states={actionStates} onAction={runAction} onClearError={clearActionError} />
       </main>
 
       {status === 'offline' && !offlineDismissed ? (

@@ -220,49 +220,54 @@ export const Network = memo(function Network({ rx, tx, ts, ready }) {
   )
 })
 
-const ACTIONS = [
-  { id: 'terminal', label: '终端', Icon: TerminalIcon },
-  { id: 'explorer', label: '文件', Icon: FolderIcon },
-  { id: 'vscode', label: 'VS Code', Icon: CodeIcon },
-  { id: 'browser', label: '浏览器', Icon: GlobeIcon },
-  { id: 'lock', label: '锁屏', Icon: LockIcon, tone: 'danger' },
-]
+const ICON_MAP = {
+  terminal: TerminalIcon,
+  folder: FolderIcon,
+  code: CodeIcon,
+  globe: GlobeIcon,
+  lock: LockIcon,
+}
 
-export const Shortcuts = memo(function Shortcuts({ states, onAction, onClearError }) {
+export const Shortcuts = memo(function Shortcuts({ actions = [], states, onAction, onClearError }) {
   const errorEntry = Object.entries(states).find(([, s]) => s?.state === 'error')
   const [errorId, error] = errorEntry || []
 
   return (
-    <Tile area="keys" label="快捷操作" meta="点击执行">
-      <div className="keys">
-        {ACTIONS.map(({ id, label, Icon, tone }) => {
-          const st = states[id]
-          const busy = st?.state === 'pending'
-          const status = busy
-            ? '执行中'
-            : st?.state === 'ok'
-              ? '已完成'
-              : st?.state === 'error'
-                ? '失败'
-                : ''
-          return (
-            <button
-              key={id}
-              type="button"
-              className={`key ${tone || ''} ${st?.state || ''}`.trim()}
-              onClick={() => onAction(id, label)}
-              disabled={busy}
-              aria-busy={busy}
-            >
-              <span className="key-icon">
-                <Icon size={20} />
-              </span>
-              <span className="key-label">{label}</span>
-              <span className="key-status">{status || '\u00A0'}</span>
-            </button>
-          )
-        })}
-      </div>
+    <Tile area="keys" label="快捷操作" meta={actions.length ? '点击执行' : '待配置'}>
+      {actions.length ? (
+        <div className="keys">
+          {actions.map(({ id, label, icon, kind }) => {
+            const Icon = ICON_MAP[icon] || TerminalIcon
+            const st = states[id]
+            const busy = st?.state === 'pending'
+            const status = busy
+              ? '执行中'
+              : st?.state === 'ok'
+                ? '已完成'
+                : st?.state === 'error'
+                  ? '失败'
+                  : ''
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`key ${kind === 'lock' ? 'danger' : ''} ${st?.state || ''}`.trim()}
+                onClick={() => onAction(id, label)}
+                disabled={busy}
+                aria-busy={busy}
+              >
+                <span className="key-icon">
+                  <Icon size={20} />
+                </span>
+                <span className="key-label">{label}</span>
+                <span className="key-status">{status || '\u00A0'}</span>
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="keys-empty">暂无可用动作，请在本机设置页添加</div>
+      )}
 
       {error ? (
         <div className="keys-alert" role="alert">
