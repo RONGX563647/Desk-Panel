@@ -24,6 +24,22 @@ function fakeSpawn(outcome = 'spawn') {
   return spawnFn
 }
 
+function fakeExitSpawn(code = 0) {
+  const calls = []
+  const spawnFn = (cmd, args, options) => {
+    calls.push({ cmd, args, options })
+    const child = new EventEmitter()
+    child.unref = () => {}
+    process.nextTick(() => {
+      child.emit('spawn')
+      process.nextTick(() => child.emit('exit', code))
+    })
+    return child
+  }
+  spawnFn.calls = calls
+  return spawnFn
+}
+
 test('应用动作以真实 spawn 事件为成功依据', async () => {
   const spawnFn = fakeSpawn()
   const run = createActionRunner({ spawnFn })
@@ -77,4 +93,21 @@ test('启动超时返回明确错误', async () => {
   const run = createActionRunner({ spawnFn, timeoutMs: 20 })
 
   await assert.rejects(() => run({ kind: 'lock' }), /启动超时/)
+})
+
+test('熄屏动作等待 PowerShell 执行完成', async () => {
+  const spawnFn = fakeExitSpawn()
+  const run = createActionRunner({ spawnFn })
+
+  await run({ kind: 'monitor-off', label: '熄屏' })
+
+  assert.equal(spawnFn.calls.length, 1)
+  assert.equal(spawnFn.calls[0].cmd, 'powershell.exe')
+  assert.ok(spawnFn.calls[0].args.includes('-Command'))
+})
+
+test('熄屏指令失败时返回错误', async () => {
+  const run = createActionRunner({ spawnFn: fakeExitSpawn(1) })
+
+  await assert.rejects(() => run({ kind: 'monitor-off', label: '熄屏' }), /熄灭显示器失败/)
 })

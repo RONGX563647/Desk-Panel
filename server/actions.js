@@ -2,8 +2,23 @@ import { spawn } from 'node:child_process'
 
 const SHELL_TARGET = /\.(exe|com)$/i
 
+// 通过 WM_SYSCOMMAND / SC_MONITORPOWER 关闭显示器
+const MONITOR_OFF_SCRIPT =
+  'Add-Type -TypeDefinition \'using System;using System.Runtime.InteropServices;public static class DeskPanelDisplay{[DllImport("user32.dll")]public static extern IntPtr SendMessage(IntPtr hWnd,uint Msg,IntPtr wParam,IntPtr lParam);}\'; [void][DeskPanelDisplay]::SendMessage([IntPtr]0xffff,0x0112,[IntPtr]0xF170,[IntPtr]2)'
+
 export function createActionRunner({ spawnFn = spawn, timeoutMs = 5000 } = {}) {
   function launch(action) {
+    if (action.kind === 'monitor-off') {
+      const child = spawnFn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', MONITOR_OFF_SCRIPT],
+        { windowsHide: true, stdio: 'ignore' }
+      )
+      // 熄屏指令需要等 PowerShell 执行完才有结果
+      child.waitExit = true
+      return child
+    }
+
     if (action.kind === 'lock') {
       return spawnFn('rundll32.exe', ['user32.dll,LockWorkStation'], {
         detached: true,
@@ -60,9 +75,17 @@ export function createActionRunner({ spawnFn = spawn, timeoutMs = 5000 } = {}) {
         }
         resolve()
       }
-      const timer = setTimeout(() => finish(new Error('启动超时，请检查目标程序')), timeoutMs)
+      const timer = setTimeout(
+        () => finish(new Error(child.waitExit ? '熄屏指令执行超时' : '启动超时，请检查目标程序')),
+        timeoutMs
+      )
 
-      child.once('spawn', () => finish())
+      child.once('spawn', () => {
+        if (!child.waitExit) finish()
+      })
+      if (child.waitExit) {
+        child.once('exit', (code) => finish(code === 0 ? null : new Error('熄灭显示器失败')))
+      }
       child.once('error', (err) =>
         finish(err.code === 'ENOENT' ? new Error('未找到目标程序，请检查安装路径或命令是否可用') : err)
       )

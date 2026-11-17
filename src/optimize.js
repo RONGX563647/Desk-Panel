@@ -52,6 +52,9 @@ export function buildOptimizePlan(metrics, info) {
       action: candidate
         ? { type: 'trim-process', pid: candidate.id, label: '整理' }
         : { type: 'open-task-manager', label: '查看进程' },
+      secondaryAction: candidate
+        ? { type: 'set-priority', pid: candidate.id, level: 'below', label: '降优先' }
+        : null,
     })
   }
 

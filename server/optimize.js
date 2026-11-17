@@ -25,16 +25,31 @@ const PROTECTED_PROCESSES = [
 
 const PROTECTED_PS_ARRAY = PROTECTED_PROCESSES.map((name) => `'${name}'`).join(',')
 
+function cleanPowerShellError(text) {
+  const lines = String(text || '')
+    .replace(/^#< CLIXML[\s\S]*$/m, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return (
+    lines.find(
+      (line) => !/^(所在位置|At line|\+|CategoryInfo|FullyQualifiedErrorId|Exception)/i.test(line)
+    ) ||
+    lines[0] ||
+    'PowerShell 执行失败'
+  )
+}
+
 function runPowerShell(script, timeout = 12000) {
+  const encoded = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; ${script}`
   return new Promise((resolve, reject) => {
     execFile(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-Command', script],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-Command', encoded],
       { windowsHide: true, timeout, maxBuffer: 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          const detail = String(stderr || err.message || '').replace(/^#< CLIXML[\s\S]*$/m, '').trim()
-          reject(new Error(detail || 'PowerShell 执行失败'))
+          reject(new Error(cleanPowerShellError(stderr || err.message)))
           return
         }
         resolve(String(stdout || '').trim())
@@ -62,7 +77,7 @@ function parseOutput(output) {
 function trimProcess(pid) {
   const script = `
 $ErrorActionPreference = 'Stop'
-$target = Get-Process -Id ${pid} -ErrorAction Stop
+try { $target = Get-Process -Id ${pid} -ErrorAction Stop } catch { throw '进程不存在或已退出' }
 if (@(${PROTECTED_PS_ARRAY}) -contains $target.ProcessName.ToLower()) {
   throw "不允许操作系统关键进程：$($target.ProcessName)"
 }
@@ -114,12 +129,12 @@ function setPriority(pid, level) {
 
   const script = `
 $ErrorActionPreference = 'Stop'
-$target = Get-Process -Id ${pid} -ErrorAction Stop
+try { $target = Get-Process -Id ${pid} -ErrorAction Stop } catch { throw '进程不存在或已退出' }
 if (@(${PROTECTED_PS_ARRAY}) -contains $target.ProcessName.ToLower()) {
   throw "不允许操作系统关键进程：$($target.ProcessName)"
 }
 $before = $target.PriorityClass.ToString()
-$target.PriorityClass = '${priority}'
+try { $target.PriorityClass = '${priority}' } catch { throw '无法修改优先级，可能需要管理员权限' }
 $after = (Get-Process -Id ${pid} -ErrorAction Stop).PriorityClass.ToString()
 @{ ok = $true; before = $before; after = $after } | ConvertTo-Json -Compress
 `

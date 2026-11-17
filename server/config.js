@@ -2,8 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export const CONFIG_VERSION = 2
-export const ICON_NAMES = ['terminal', 'folder', 'code', 'globe', 'lock']
-export const ACTION_KINDS = ['app', 'url', 'lock']
+export const ICON_NAMES = ['terminal', 'folder', 'code', 'globe', 'lock', 'monitor']
+export const ACTION_KINDS = ['app', 'url', 'lock', 'monitor-off']
 export const COMPONENT_IDS = [
   'clock',
   'cpu',
@@ -37,6 +37,7 @@ export const DEFAULT_ACTIONS = [
   { id: 'explorer', kind: 'app', label: '文件', icon: 'folder', target: 'explorer.exe', args: [], enabled: true },
   { id: 'vscode', kind: 'app', label: 'VS Code', icon: 'code', target: 'code', args: [], enabled: true },
   { id: 'browser', kind: 'url', label: '浏览器', icon: 'globe', target: 'https://github.com', args: [], enabled: true },
+  { id: 'monitor-off', kind: 'monitor-off', label: '熄屏', icon: 'monitor', target: '', args: [], enabled: true },
   { id: 'lock', kind: 'lock', label: '锁屏', icon: 'lock', target: '', args: [], enabled: true },
 ]
 
@@ -77,7 +78,7 @@ function normalizeAction(raw, index, strict, errors, taken) {
     if (strict) errors.push(`${where}目标过长`)
     target = target.slice(0, MAX_TARGET)
   }
-  if (kind === 'lock') target = ''
+  if (kind === 'lock' || kind === 'monitor-off') target = ''
   if (kind === 'url') {
     if (!/^https?:\/\//i.test(target)) {
       if (strict) errors.push(`${where}的网址必须以 http:// 或 https:// 开头`)

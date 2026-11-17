@@ -65,6 +65,16 @@ export function LockIcon({ size }) {
   )
 }
 
+export function MonitorIcon({ size }) {
+  return (
+    <Svg size={size}>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M9 20h6" />
+      <path d="M12 16v4" />
+    </Svg>
+  )
+}
+
 export function FullscreenIcon({ size }) {
   return (
     <Svg size={size}>

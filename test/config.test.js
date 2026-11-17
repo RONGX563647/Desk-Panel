@@ -64,6 +64,21 @@ test('严格保存时拒绝非法网址与空目标', () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+test('熄屏动作无需目标且可正常保存', () => {
+  const { dir, file } = tempFile()
+  const saved = saveConfig(
+    file,
+    configWith([
+      { id: 'off', kind: 'monitor-off', label: '熄屏', icon: 'monitor', target: 'ignored', args: ['x'], enabled: true },
+    ])
+  )
+
+  assert.equal(saved.actions[0].kind, 'monitor-off')
+  assert.equal(saved.actions[0].target, '')
+  assert.deepEqual(saved.actions[0].args, [])
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('配置文件损坏时回退默认动作并保留备份', () => {
   const { dir, file } = tempFile()
   fs.writeFileSync(file, '{ not json', 'utf8')
@@ -71,7 +86,7 @@ test('配置文件损坏时回退默认动作并保留备份', () => {
 
   const config = loadConfig(file, { warn: (message) => warnings.push(message) })
 
-  assert.equal(config.actions.length, 5)
+  assert.equal(config.actions.length, 6)
   assert.ok(warnings.length > 0)
   assert.ok(fs.existsSync(`${file}.bak`))
   fs.rmSync(dir, { recursive: true, force: true })
@@ -81,7 +96,7 @@ test('缺少配置文件时自动生成默认配置', () => {
   const { dir, file } = tempFile()
   const config = loadConfig(file)
 
-  assert.equal(config.actions.length, 5)
+  assert.equal(config.actions.length, 6)
   assert.equal(config.layout.pages.length, 1)
   assert.ok(config.layout.pages[0].components.includes('shortcuts'))
   assert.ok(fs.existsSync(file))

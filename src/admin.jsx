@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CodeIcon, FolderIcon, GlobeIcon, LockIcon, RefreshIcon, TerminalIcon } from './icons.jsx'
+import { CodeIcon, FolderIcon, GlobeIcon, LockIcon, MonitorIcon, RefreshIcon, TerminalIcon } from './icons.jsx'
 import { packRows } from './utils.js'
 
 const ICON_OPTIONS = [
@@ -7,6 +7,7 @@ const ICON_OPTIONS = [
   { value: 'folder', label: '文件夹', Icon: FolderIcon },
   { value: 'code', label: '代码', Icon: CodeIcon },
   { value: 'globe', label: '网址', Icon: GlobeIcon },
+  { value: 'monitor', label: '显示器', Icon: MonitorIcon },
   { value: 'lock', label: '锁', Icon: LockIcon },
 ]
 
@@ -14,12 +15,14 @@ const KIND_LABEL = {
   app: '启动目标（可执行文件或命令）',
   url: '网址',
   lock: '目标',
+  'monitor-off': '目标',
 }
 
 const KIND_TARGET_HINT = {
   app: '如 notepad.exe 或 C:\\Tools\\app.exe',
   url: 'https://example.com',
   lock: '锁定当前会话（系统动作）',
+  'monitor-off': '关闭显示器（系统动作）',
 }
 
 const COMPONENT_GROUPS = [
@@ -67,11 +70,12 @@ const TEMPLATES = {
 const MAX_PAGES = 5
 
 function newAction(kind) {
+  const system = kind === 'monitor-off'
   return {
     id: `act_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     kind,
-    label: kind === 'url' ? '新网址' : '新应用',
-    icon: kind === 'url' ? 'globe' : 'terminal',
+    label: system ? '熄屏' : kind === 'url' ? '新网址' : '新应用',
+    icon: system ? 'monitor' : kind === 'url' ? 'globe' : 'terminal',
     target: '',
     args: [],
     enabled: true,
@@ -437,9 +441,9 @@ export default function AdminPanel() {
                         <span>{KIND_LABEL[action.kind]}</span>
                         <input
                           className="input"
-                          value={action.kind === 'lock' ? '' : action.target}
+                          value={action.kind === 'lock' || action.kind === 'monitor-off' ? '' : action.target}
                           placeholder={KIND_TARGET_HINT[action.kind]}
-                          disabled={action.kind === 'lock'}
+                          disabled={action.kind === 'lock' || action.kind === 'monitor-off'}
                           onChange={(e) => updateAction(index, { target: e.target.value })}
                         />
                       </label>
@@ -462,6 +466,8 @@ export default function AdminPanel() {
 
                     {action.kind === 'lock' ? (
                       <div className="admin-hint">系统动作，目标固定为锁定当前会话。</div>
+                    ) : action.kind === 'monitor-off' ? (
+                      <div className="admin-hint">系统动作，点击后立即关闭显示器，移动鼠标或按键即可唤醒。</div>
                     ) : null}
                   </section>
                 )
@@ -476,6 +482,9 @@ export default function AdminPanel() {
               </button>
               <button type="button" className="btn ghost" onClick={() => addAction('url')}>
                 新增网址动作
+              </button>
+              <button type="button" className="btn ghost" onClick={() => addAction('monitor-off')}>
+                新增熄屏动作
               </button>
             </div>
             </>

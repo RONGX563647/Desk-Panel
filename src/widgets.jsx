@@ -4,6 +4,7 @@ import {
   FolderIcon,
   GlobeIcon,
   LockIcon,
+  MonitorIcon,
   MuteIcon,
   NextIcon,
   PauseIcon,
@@ -401,33 +402,61 @@ export const Optimize = memo(function Optimize({ metrics, info, ready, states = 
         <MetricSkeleton />
       ) : (
         <div className="opt-body">
-          <div className={`opt-score ${plan.level}`}>
+          <div className={`opt-score ${plan.level}`} role="img" aria-label={`健康分 ${plan.score}`}>
             <strong>{plan.score}</strong>
             <span>{plan.level === 'ok' ? '良好' : plan.level === 'warn' ? '注意' : '偏高'}</span>
           </div>
           <div className="opt-list">
             {plan.recommendations.map((item) => {
-              const action = item.action
-              const key = action ? `${action.type}-${action.pid || 'all'}` : item.key
-              const state = action ? states[key] : null
-              const busy = state?.state === 'pending'
+              const primary = item.action
+              const secondary = item.secondaryAction
+              const primaryKey = primary ? `${primary.type}-${primary.pid || 'all'}` : null
+              const secondaryKey = secondary ? `${secondary.type}-${secondary.pid || 'all'}` : null
+              const primaryState = primaryKey ? states[primaryKey] : null
+              const secondaryState = secondaryKey ? states[secondaryKey] : null
+              const primaryBusy = primaryState?.state === 'pending'
+              const secondaryBusy = secondaryState?.state === 'pending'
               return (
                 <div className={`opt-item ${item.tone}`} key={item.key}>
                   <div className="opt-item-main">
                     <span className="opt-title">{item.title}</span>
                     <span className="opt-detail ellipsis" title={item.detail}>
                       {item.detail}
+                      {secondary ? (
+                        <>
+                          <span className="opt-detail-sep"> · </span>
+                          <button
+                            type="button"
+                            className="opt-link"
+                            disabled={secondaryBusy}
+                            aria-busy={secondaryBusy}
+                            title="将该进程优先级降为 BelowNormal，不会结束进程"
+                            onClick={() => onOptimize(secondary, secondaryKey, secondary.label)}
+                          >
+                            {secondaryBusy
+                              ? '处理中'
+                              : secondaryState?.state === 'ok'
+                                ? '已完成'
+                                : secondary.label}
+                          </button>
+                        </>
+                      ) : null}
                     </span>
                   </div>
-                  {action ? (
+                  {primary ? (
                     <button
                       type="button"
-                      className={`opt-action ${state?.state || ''}`.trim()}
-                      disabled={busy}
-                      aria-busy={busy}
-                      onClick={() => onOptimize(action, key, action.label)}
+                      className={`opt-action ${primaryState?.state || ''}`.trim()}
+                      disabled={primaryBusy}
+                      aria-busy={primaryBusy}
+                      title={
+                        primary.type === 'trim-process'
+                          ? '仅整理该进程的工作集，不会结束进程'
+                          : undefined
+                      }
+                      onClick={() => onOptimize(primary, primaryKey, primary.label)}
                     >
-                      {busy ? '处理中' : state?.state === 'ok' ? '已完成' : action.label}
+                      {primaryBusy ? '处理中' : primaryState?.state === 'ok' ? '已完成' : primary.label}
                     </button>
                   ) : null}
                 </div>
@@ -685,6 +714,7 @@ const ICON_MAP = {
   code: CodeIcon,
   globe: GlobeIcon,
   lock: LockIcon,
+  monitor: MonitorIcon,
 }
 
 export const Shortcuts = memo(function Shortcuts({ actions = [], states, onAction, onClearError }) {
