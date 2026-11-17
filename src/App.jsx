@@ -43,6 +43,7 @@ export default function App() {
   const controllers = useRef(new Set())
   const aliveRef = useRef(true)
   const wakeRef = useRef(null)
+  const gridRef = useRef(null)
   const swipeRef = useRef(null)
 
   const dismissToast = useCallback((id) => {
@@ -340,8 +341,10 @@ export default function App() {
     [pages.length]
   )
 
+  // 鼠标拖拽切换（桌面端）
   const onPointerDown = useCallback(
     (event) => {
+      if (event.pointerType !== 'mouse') return
       if (pages.length < 2) return
       if (event.target.closest('button, a, input, select, textarea')) return
       swipeRef.current = { x: event.clientX, y: event.clientY, t: Date.now() }
@@ -351,17 +354,84 @@ export default function App() {
 
   const onPointerUp = useCallback(
     (event) => {
+      if (event.pointerType !== 'mouse') return
       const start = swipeRef.current
       swipeRef.current = null
       if (!start) return
       const dx = event.clientX - start.x
       const dy = event.clientY - start.y
-      if (Date.now() - start.t > 900) return
-      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.4) return
+      if (Date.now() - start.t > 1000) return
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return
       changePage(dx < 0 ? 1 : -1)
     },
     [changePage]
   )
+
+  // 触摸滑动切换：使用非 passive 监听，横向手势时阻止页面滚动，避免 pointercancel 吞掉事件
+  useEffect(() => {
+    const el = gridRef.current
+    if (!el || pages.length < 2) return
+
+    let start = null
+    let axis = null
+
+    const onTouchStart = (event) => {
+      axis = null
+      if (event.touches.length !== 1) {
+        start = null
+        return
+      }
+      if (event.target.closest('button, a, input, select, textarea')) {
+        start = null
+        return
+      }
+      const touch = event.touches[0]
+      start = { x: touch.clientX, y: touch.clientY, t: Date.now() }
+    }
+
+    const onTouchMove = (event) => {
+      if (!start || event.touches.length !== 1) return
+      const touch = event.touches[0]
+      const dx = touch.clientX - start.x
+      const dy = touch.clientY - start.y
+      if (!axis) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+        axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'x' : 'y'
+      }
+      if (axis === 'x' && event.cancelable) event.preventDefault()
+    }
+
+    const onTouchEnd = (event) => {
+      const state = start
+      const dir = axis
+      start = null
+      axis = null
+      if (!state || dir !== 'x') return
+      const touch = event.changedTouches[0]
+      if (!touch) return
+      const dx = touch.clientX - state.x
+      const dy = touch.clientY - state.y
+      if (Date.now() - state.t > 1000) return
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return
+      changePage(dx < 0 ? 1 : -1)
+    }
+
+    const onTouchCancel = () => {
+      start = null
+      axis = null
+    }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd)
+    el.addEventListener('touchcancel', onTouchCancel)
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+      el.removeEventListener('touchcancel', onTouchCancel)
+    }
+  }, [changePage, pages.length])
 
   const renderWidget = (id) => {
     switch (id) {
@@ -464,10 +534,11 @@ export default function App() {
 
       <main
         className="grid"
+        ref={gridRef}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => {
-          swipeRef.current = null
+        onPointerCancel={(event) => {
+          if (event.pointerType === 'mouse') swipeRef.current = null
         }}
       >
         {rows.map((row, rowIndex) => (

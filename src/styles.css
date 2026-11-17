@@ -343,6 +343,8 @@ button {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  /* 横向手势交给 JS 处理页面切换，纵向仍可滚动 */
+  touch-action: pan-y;
 }
 
 .grid-row {
