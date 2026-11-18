@@ -21,9 +21,21 @@ const PROTECTED_PROCESSES = [
   'secure system',
   'dwm',
   'explorer',
+  'svchost',
+  'taskhostw',
+  'sihost',
+  'fontdrvhost',
 ]
 
 const PROTECTED_PS_ARRAY = PROTECTED_PROCESSES.map((name) => `'${name}'`).join(',')
+
+export function isProtectedProcess(name) {
+  return PROTECTED_PROCESSES.includes(String(name || '').toLowerCase())
+}
+
+export function isProtectedPid(pid) {
+  return Number(pid) === process.pid
+}
 
 function cleanPowerShellError(text) {
   const lines = String(text || '')
@@ -75,6 +87,8 @@ function parseOutput(output) {
 }
 
 function trimProcess(pid) {
+  if (isProtectedPid(pid)) throw new Error('不允许操作 Desk Panel 服务自身')
+
   const script = `
 $ErrorActionPreference = 'Stop'
 try { $target = Get-Process -Id ${pid} -ErrorAction Stop } catch { throw '进程不存在或已退出' }
@@ -124,6 +138,7 @@ $after = (Get-Process -Id ${pid} -ErrorAction SilentlyContinue).WorkingSet64
 }
 
 function setPriority(pid, level) {
+  if (isProtectedPid(pid)) throw new Error('不允许操作 Desk Panel 服务自身')
   const priority = PRIORITY_LEVELS[level]
   if (!priority) throw new Error('优先级不合法')
 

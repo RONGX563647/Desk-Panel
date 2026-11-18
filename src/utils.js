@@ -1,5 +1,22 @@
 export const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
+const TOKEN_KEY = 'panel-token'
+
+// 口令优先取 URL，成功后记在本地；之后直接打开面板也不用再手动带参数
+export function readAccessToken() {
+  if (typeof location === 'undefined') return ''
+  const fromUrl = new URLSearchParams(location.search).get('token') || ''
+  try {
+    if (fromUrl) {
+      localStorage.setItem(TOKEN_KEY, fromUrl)
+      return fromUrl
+    }
+    return localStorage.getItem(TOKEN_KEY) || ''
+  } catch {
+    return fromUrl
+  }
+}
+
 export const pad2 = (n) => String(n).padStart(2, '0')
 
 export function formatClock(ts) {
@@ -45,12 +62,17 @@ export const COMPONENT_SPANS = {
   network: 4,
   temp: 6,
   processes: 7,
+  devices: 4,
   latency: 5,
   system: 6,
   power: 4,
+  fan: 6,
+  sensors: 12,
   media: 4,
   optimize: 4,
+  agent: 6,
   shortcuts: 12,
+  dev: 12,
 }
 
 // 按 12 列基准打包组件，行内按权重伸展自动占满整行

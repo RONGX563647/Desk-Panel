@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { readAccessToken } from './utils.js'
 
 // 单条 WebSocket 长连接：在线/弱网/离线三态，断线指数退避，页面隐藏时暂停渲染。
 export function usePanel() {
@@ -6,7 +7,10 @@ export function usePanel() {
   const [info, setInfo] = useState(null)
   const [actions, setActions] = useState([])
   const [layout, setLayout] = useState(null)
+  const [settings, setSettings] = useState(null)
   const [media, setMedia] = useState(null)
+  const [dev, setDev] = useState({ services: [], proc: [] })
+  const [devLogs, setDevLogs] = useState({})
   const [status, setStatus] = useState('connecting')
   const [lastUpdate, setLastUpdate] = useState(0)
 
@@ -37,7 +41,7 @@ export function usePanel() {
     // 自动重连期间保持“离线”状态，避免反复弹出重连提示
     if (!silent) setStatus('connecting')
 
-    const token = new URLSearchParams(location.search).get('token') || ''
+    const token = readAccessToken()
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const query = token ? `?token=${encodeURIComponent(token)}` : ''
     const ws = new WebSocket(`${proto}://${location.host}/ws${query}`)
@@ -60,11 +64,29 @@ export function usePanel() {
         setInfo(msg.info)
         if (Array.isArray(msg.actions)) setActions(msg.actions)
         if (msg.layout?.pages?.length) setLayout(msg.layout)
+        if (msg.settings) setSettings(msg.settings)
         if (msg.media) setMedia(msg.media)
+        if (msg.dev) setDev({ services: msg.dev.services || [], proc: msg.dev.proc || [] })
       }
       if (msg.t === 'config') {
         if (Array.isArray(msg.actions)) setActions(msg.actions)
         if (msg.layout?.pages?.length) setLayout(msg.layout)
+        if (msg.settings) setSettings(msg.settings)
+        if (msg.agent) setInfo((prev) => ({ ...(prev || {}), agent: msg.agent }))
+        if (msg.dev) setDev({ services: msg.dev.services || [], proc: msg.dev.proc || [] })
+      }
+      if (msg.t === 'devproc' && msg.service) {
+        const next = msg.service
+        setDev((prev) => {
+          const proc = prev.proc.filter((item) => item.id !== next.id)
+          return { ...prev, proc: [...proc, next] }
+        })
+      }
+      if (msg.t === 'devlogs' && msg.id && Array.isArray(msg.lines)) {
+        setDevLogs((prev) => {
+          const merged = [...(prev[msg.id] || []), ...msg.lines]
+          return { ...prev, [msg.id]: merged.slice(-200) }
+        })
       }
       if (msg.t === 'media' && msg.media) setMedia(msg.media)
       if (msg.t === 'metrics') {
@@ -144,5 +166,24 @@ export function usePanel() {
     connect()
   }, [connect])
 
-  return { metrics, info, actions, layout, media, status, lastUpdate, reconnect }
+  // 打开日志浮窗前补齐历史行（WS 只推送增量）
+  const loadDevLogs = useCallback((id, lines) => {
+    if (!Array.isArray(lines)) return
+    setDevLogs((prev) => ({ ...prev, [id]: lines.slice(-200) }))
+  }, [])
+
+  return {
+    metrics,
+    info,
+    actions,
+    layout,
+    settings,
+    media,
+    dev,
+    devLogs,
+    loadDevLogs,
+    status,
+    lastUpdate,
+    reconnect,
+  }
 }

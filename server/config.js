@@ -1,9 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const CONFIG_VERSION = 2
-export const ICON_NAMES = ['terminal', 'folder', 'code', 'globe', 'lock', 'monitor']
-export const ACTION_KINDS = ['app', 'url', 'lock', 'monitor-off']
+export const CONFIG_VERSION = 6
+export const ICON_NAMES = ['terminal', 'folder', 'code', 'globe', 'lock', 'monitor', 'moon']
+export const ACTION_KINDS = ['app', 'url', 'open-path', 'lock', 'monitor-off', 'sleep']
 export const COMPONENT_IDS = [
   'clock',
   'cpu',
@@ -13,21 +13,54 @@ export const COMPONENT_IDS = [
   'network',
   'temp',
   'processes',
+  'devices',
   'latency',
   'system',
   'power',
+  'fan',
+  'sensors',
   'media',
   'optimize',
+  'agent',
   'shortcuts',
+  'dev',
 ]
-export const MAX_PAGES = 5
+export const MAX_PAGES = 6
+
+export const DEFAULT_SETTINGS = {
+  theme: 'dark',
+  metricsInterval: 60,
+  autoRotate: 0,
+  token: '',
+  fanUrl: 'http://127.0.0.1:8085',
+}
+
+export const DEFAULT_AGENT = {
+  enabled: false,
+  permission: 'advice',
+  baseUrl: 'https://api.openai.com/v1',
+  model: 'gpt-4o-mini',
+  apiKey: '',
+}
+
+export const DEFAULT_DEV = { services: [] }
+
+const MAX_SERVICES = 12
+const MAX_SERVICE_COMMAND = 512
+const MAX_SERVICE_CWD = 512
+
+const MIN_METRICS_INTERVAL = 5
+const MAX_METRICS_INTERVAL = 300
+const MAX_AUTO_ROTATE = 120
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{4,64}$/
+const FAN_URL_PATTERN = /^https?:\/\/[^\s]+$/i
 
 export const DEFAULT_LAYOUT = {
   pages: [
     {
       id: 'main',
       name: '主页',
-      components: ['clock', 'cpu', 'memory', 'disk', 'network', 'shortcuts'],
+      components: ['clock', 'cpu', 'memory', 'disk', 'network', 'shortcuts', 'sensors'],
     },
   ],
 }
@@ -38,6 +71,7 @@ export const DEFAULT_ACTIONS = [
   { id: 'vscode', kind: 'app', label: 'VS Code', icon: 'code', target: 'code', args: [], enabled: true },
   { id: 'browser', kind: 'url', label: '浏览器', icon: 'globe', target: 'https://github.com', args: [], enabled: true },
   { id: 'monitor-off', kind: 'monitor-off', label: '熄屏', icon: 'monitor', target: '', args: [], enabled: true },
+  { id: 'sleep', kind: 'sleep', label: '睡眠', icon: 'moon', target: '', args: [], enabled: true },
   { id: 'lock', kind: 'lock', label: '锁屏', icon: 'lock', target: '', args: [], enabled: true },
 ]
 
@@ -78,12 +112,12 @@ function normalizeAction(raw, index, strict, errors, taken) {
     if (strict) errors.push(`${where}目标过长`)
     target = target.slice(0, MAX_TARGET)
   }
-  if (kind === 'lock' || kind === 'monitor-off') target = ''
+  if (kind === 'lock' || kind === 'monitor-off' || kind === 'sleep') target = ''
   if (kind === 'url') {
     if (!/^https?:\/\//i.test(target)) {
       if (strict) errors.push(`${where}的网址必须以 http:// 或 https:// 开头`)
     }
-  } else if (kind === 'app' && !target) {
+  } else if ((kind === 'app' || kind === 'open-path') && !target) {
     if (strict) errors.push(`${where}缺少启动目标`)
   }
 
@@ -96,7 +130,9 @@ function normalizeAction(raw, index, strict, errors, taken) {
       if (strict && args.length !== raw.args.length) errors.push(`${where}的参数包含无效内容`)
     }
   }
-  if (kind !== 'app') args = []
+  // open-path 只保留第一个参数，作为打开方式（explorer.exe / code / trae）
+  if (kind === 'open-path') args = args.slice(0, 1)
+  else if (kind !== 'app') args = []
 
   let id = typeof raw.id === 'string' ? raw.id.trim() : ''
   if (!ID_PATTERN.test(id) || taken.has(id)) {
@@ -167,11 +203,134 @@ function normalizeLayout(raw, strict, errors) {
   return { pages }
 }
 
+function normalizeSettings(raw, strict, errors) {
+  const source = isObject(raw) ? raw : {}
+  const theme = source.theme === 'light' ? 'light' : 'dark'
+
+  let metricsInterval = Number(source.metricsInterval)
+  if (!Number.isFinite(metricsInterval)) metricsInterval = DEFAULT_SETTINGS.metricsInterval
+  metricsInterval = Math.min(
+    MAX_METRICS_INTERVAL,
+    Math.max(MIN_METRICS_INTERVAL, Math.round(metricsInterval))
+  )
+
+  let autoRotate = Number(source.autoRotate)
+  if (!Number.isFinite(autoRotate) || autoRotate < 0) autoRotate = 0
+  autoRotate = Math.min(MAX_AUTO_ROTATE, Math.round(autoRotate))
+
+  const token = typeof source.token === 'string' ? source.token.trim() : ''
+  if (token && !TOKEN_PATTERN.test(token) && strict) {
+    errors.push('访问口令需为 4-64 位字母、数字、下划线或短横线')
+  }
+
+  const rawFanUrl = typeof source.fanUrl === 'string' ? source.fanUrl.trim() : ''
+  const fanUrl = FAN_URL_PATTERN.test(rawFanUrl) ? rawFanUrl : DEFAULT_SETTINGS.fanUrl
+
+  return {
+    theme,
+    metricsInterval,
+    autoRotate,
+    token: TOKEN_PATTERN.test(token) ? token : '',
+    fanUrl,
+  }
+}
+
+function normalizeAgent(raw, strict, errors) {
+  const source = isObject(raw) ? raw : {}
+  const baseUrl = typeof source.baseUrl === 'string' ? source.baseUrl.trim() : ''
+  const model = typeof source.model === 'string' ? source.model.trim() : ''
+  const apiKey = typeof source.apiKey === 'string' ? source.apiKey.trim() : ''
+  const enabled = source.enabled === true
+  const permission = source.permission === 'safe' ? 'safe' : 'advice'
+
+  if (source.permission && !['advice', 'safe'].includes(source.permission) && strict) {
+    errors.push('Agent 权限只能是 advice 或 safe')
+  }
+
+  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+    if (strict) errors.push('Agent 网关地址必须以 http:// 或 https:// 开头')
+  }
+  if (baseUrl.length > 512 && strict) errors.push('Agent 网关地址过长')
+  if (model.length > 80 && strict) errors.push('Agent 模型名称过长')
+  if (apiKey.length > 512 && strict) errors.push('Agent API Key 过长')
+
+  return {
+    enabled,
+    permission,
+    baseUrl: /^https?:\/\//i.test(baseUrl) ? baseUrl.slice(0, 512) : DEFAULT_AGENT.baseUrl,
+    model: (model || DEFAULT_AGENT.model).slice(0, 80),
+    apiKey: apiKey.slice(0, 512),
+  }
+}
+
+export function createDefaultConfig() {
+  return {
+    version: CONFIG_VERSION,
+    actions: cloneDefaults(),
+    layout: cloneDefaultLayout(),
+    settings: { ...DEFAULT_SETTINGS },
+    agent: { ...DEFAULT_AGENT },
+    dev: cloneDefaultDev(),
+  }
+}
+
+function cloneDefaultDev() {
+  return { services: [] }
+}
+
+// 开发服务：command 交给 shell 执行，cwd 为空时用面板所在目录
+function normalizeDev(raw, strict, errors) {
+  if (raw == null) return cloneDefaultDev()
+  const source = isObject(raw) ? raw : {}
+  const rawServices = Array.isArray(source.services) ? source.services : []
+  if (rawServices.length > MAX_SERVICES && strict) {
+    errors.push(`开发服务最多 ${MAX_SERVICES} 个`)
+  }
+
+  const taken = new Set()
+  const services = []
+  rawServices.slice(0, MAX_SERVICES).forEach((item, index) => {
+    const where = `第 ${index + 1} 个开发服务`
+    if (!isObject(item)) {
+      if (strict) errors.push(`${where}格式不正确`)
+      return
+    }
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    if (!name) {
+      if (strict) errors.push(`${where}缺少名称`)
+      return
+    }
+    const command = typeof item.command === 'string' ? item.command.trim() : ''
+    if (!command) {
+      if (strict) errors.push(`${where}缺少启动命令`)
+      return
+    }
+    const cwd = typeof item.cwd === 'string' ? item.cwd.trim() : ''
+    if (command.length > MAX_SERVICE_COMMAND && strict) errors.push(`${where}命令过长`)
+    if (cwd.length > MAX_SERVICE_CWD && strict) errors.push(`${where}目录过长`)
+
+    let id = typeof item.id === 'string' ? item.id.trim() : ''
+    if (!ID_PATTERN.test(id) || taken.has(id)) id = `svc_${Date.now().toString(36)}${index}`
+    taken.add(id)
+
+    const port = Number(item.port)
+    services.push({
+      id,
+      name: name.slice(0, MAX_LABEL),
+      cwd: cwd.slice(0, MAX_SERVICE_CWD),
+      command: command.slice(0, MAX_SERVICE_COMMAND),
+      port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0,
+    })
+  })
+
+  return { services }
+}
+
 export function normalizeConfig(raw, { strict = false } = {}) {
   const errors = []
   if (!isObject(raw) || !Array.isArray(raw.actions)) {
     if (strict) errors.push('配置缺少动作列表')
-    return { config: { version: CONFIG_VERSION, actions: cloneDefaults(), layout: cloneDefaultLayout() }, errors }
+    return { config: createDefaultConfig(), errors }
   }
 
   const taken = new Set()
@@ -182,16 +341,42 @@ export function normalizeConfig(raw, { strict = false } = {}) {
   })
 
   const layout = normalizeLayout(raw.layout, strict, errors)
-  return { config: { version: CONFIG_VERSION, actions, layout }, errors }
+  const settings = normalizeSettings(raw.settings, strict, errors)
+  const agent = normalizeAgent(raw.agent, strict, errors)
+  const dev = normalizeDev(raw.dev, strict, errors)
+  return { config: { version: CONFIG_VERSION, actions, layout, settings, agent, dev }, errors }
 }
 
 function cloneDefaults() {
   return DEFAULT_ACTIONS.map((action) => ({ ...action, args: [...action.args] }))
 }
 
+// v4 -> v5：新增硬件详情卡片；v5 -> v6：新增开发服务配置
+function migrateConfig(raw) {
+  if (!isObject(raw)) return raw
+  const version = Number(raw.version)
+  if (!Number.isFinite(version) || version >= CONFIG_VERSION) return raw
+  let next = { ...raw, version: CONFIG_VERSION }
+  if (version < 5) {
+    const layout = raw.layout
+    if (isObject(layout) && Array.isArray(layout.pages) && layout.pages.length) {
+      const pages = layout.pages.map((page, index) => {
+        if (index !== 0 || !isObject(page) || !Array.isArray(page.components)) return page
+        if (page.components.includes('sensors')) return page
+        return { ...page, components: [...page.components, 'sensors'] }
+      })
+      next = { ...next, layout: { ...layout, pages } }
+    }
+  }
+  if (version < 6 && !isObject(raw.dev)) {
+    next = { ...next, dev: cloneDefaultDev() }
+  }
+  return next
+}
+
 export function loadConfig(file, { warn = () => {} } = {}) {
   const fallback = () => {
-    const config = { version: CONFIG_VERSION, actions: cloneDefaults(), layout: cloneDefaultLayout() }
+    const config = createDefaultConfig()
     saveConfig(file, config)
     return config
   }
@@ -200,7 +385,8 @@ export function loadConfig(file, { warn = () => {} } = {}) {
 
   let raw
   try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+    // 外部编辑器保存时可能带 BOM，直接 JSON.parse 会失败并误回退默认配置
+    raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
   } catch (err) {
     warn(`配置文件无法解析，已回退默认配置：${err.message}`)
     backup(file)
@@ -213,8 +399,16 @@ export function loadConfig(file, { warn = () => {} } = {}) {
     return fallback()
   }
 
-  const { config, errors } = normalizeConfig(raw)
+  const migrated = migrateConfig(raw)
+  const { config, errors } = normalizeConfig(migrated)
   for (const message of errors) warn(`配置项已忽略：${message}`)
+  if (migrated !== raw) {
+    try {
+      saveConfig(file, config)
+    } catch {
+      /* 迁移写回失败时仍使用内存中的配置 */
+    }
+  }
   return config
 }
 
@@ -258,3 +452,32 @@ export function publicLayout(config) {
     pages: config.layout.pages.map(({ id, name, components }) => ({ id, name, components: [...components] })),
   }
 }
+
+// 只向面板下发可公开的设置，访问口令不下发到局域网设备
+export function publicSettings(config) {
+  const settings = config.settings || DEFAULT_SETTINGS
+  return {
+    theme: settings.theme,
+    metricsInterval: settings.metricsInterval,
+    autoRotate: settings.autoRotate,
+  }
+}
+
+// 只下发开发服务的展示信息，启动命令与工作目录留在服务端
+export function publicDev(config) {
+  const dev = config.dev || DEFAULT_DEV
+  return {
+    services: (dev.services || []).map(({ id, name, port }) => ({ id, name, port })),
+  }
+}
+
+// API Key 与网关地址只留在服务端
+export function publicAgent(config) {
+  const agent = config.agent || DEFAULT_AGENT
+  return {
+    enabled: agent.enabled === true,
+    permission: agent.permission === 'safe' ? 'safe' : 'advice',
+    model: agent.model || DEFAULT_AGENT.model,
+  }
+}
+

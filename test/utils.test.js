@@ -45,3 +45,8 @@ test('页面切换支持循环', () => {
   assert.equal(wrapPage(2, 1, 3), 0)
   assert.equal(wrapPage(0, -1, 3), 2)
 })
+
+test('硬件详情卡片独占一行', () => {
+  const rows = packRows(['cpu', 'sensors', 'memory'])
+  assert.deepEqual(rows[1], [{ id: 'sensors', span: 12 }])
+})

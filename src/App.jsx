@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePanel } from './usePanel.js'
 import {
+  Agent,
   Clock,
   Cpu,
+  Devices,
   Disk,
+  Fan,
   Gpu,
+  Dev,
   Latency,
   Media,
   Memory,
@@ -12,13 +16,14 @@ import {
   Optimize,
   Power,
   Processes,
+  Sensors,
   Shortcuts,
   System,
   Temp,
 } from './widgets.jsx'
 import InstallHint from './InstallHint.jsx'
 import { CloseIcon, FullscreenIcon, SunIcon, ThemeIcon } from './icons.jsx'
-import { formatClock, formatUptime, packRows, wrapPage } from './utils.js'
+import { formatClock, formatUptime, packRows, readAccessToken, wrapPage } from './utils.js'
 
 const STATUS_TEXT = {
   connecting: '连接中',
@@ -34,21 +39,39 @@ const FALLBACK_PAGE = {
 }
 
 const THEME_KEY = 'panel-theme'
+const THEME_MANUAL_KEY = 'panel-theme-manual'
 const THEME_COLOR = { dark: '#0b0f14', light: '#eef1f5' }
 
 export default function App() {
-  const { metrics, info, actions, layout, media, status, lastUpdate, reconnect } = usePanel()
+  const { metrics, info, actions, layout, settings, media, dev, devLogs, loadDevLogs, status, lastUpdate, reconnect } =
+    usePanel()
   const [toasts, setToasts] = useState([])
   const [actionStates, setActionStates] = useState({})
   const [mediaStates, setMediaStates] = useState({})
   const [optimizeStates, setOptimizeStates] = useState({})
+  const [fanState, setFanState] = useState({ state: 'idle', percent: null, error: '' })
+  const [agentState, setAgentState] = useState({ state: 'idle', result: null, error: '' })
+  const [devState, setDevState] = useState({ state: 'idle', ports: [], error: '', pendingPid: 0 })
+  const [pendingDevice, setPendingDevice] = useState('')
+  const [screenOff, setScreenOff] = useState(false)
   const [activePage, setActivePage] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(() => !!document.fullscreenElement)
   const [wake, setWake] = useState(false)
   const [theme, setTheme] = useState(() => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'))
 
-  const token = useMemo(() => new URLSearchParams(location.search).get('token') || '', [])
+  const token = useMemo(() => readAccessToken(), [])
   const ready = !!metrics
+
+  const displayedActions = useMemo(() => {
+    if (!screenOff) return actions || []
+    let replaced = false
+    return (actions || []).flatMap((action) => {
+      if (action.kind !== 'monitor-off') return [action]
+      if (replaced) return []
+      replaced = true
+      return [{ ...action, id: '__wake', label: '亮屏', kind: 'monitor-on' }]
+    })
+  }, [actions, screenOff])
 
   const toastIdRef = useRef(0)
   const toastTimers = useRef(new Map())
@@ -58,11 +81,15 @@ export default function App() {
   const mediaTimers = useRef(new Map())
   const pendingOptimize = useRef(new Set())
   const optimizeTimers = useRef(new Map())
+  const fanBusyRef = useRef(false)
+  const agentBusyRef = useRef(false)
+  const devBusyRef = useRef(false)
   const controllers = useRef(new Set())
   const aliveRef = useRef(true)
   const wakeRef = useRef(null)
   const gridRef = useRef(null)
   const swipeRef = useRef(null)
+  const themeTouchedRef = useRef(false)
 
   const dismissToast = useCallback((id) => {
     const timer = toastTimers.current.get(id)
@@ -117,7 +144,7 @@ export default function App() {
   }, [])
 
   const runAction = useCallback(
-    async (id, label) => {
+    async (id, label, kind) => {
       if (pendingActions.current.has(id)) return
       if (status === 'offline') {
         pushToast('error', '连接已断开，无法执行操作')
@@ -146,6 +173,8 @@ export default function App() {
         }
         if (!aliveRef.current) return
         setActionStates((prev) => ({ ...prev, [id]: { state: 'ok' } }))
+        if (kind === 'monitor-off') setScreenOff(true)
+        if (kind === 'monitor-on') setScreenOff(false)
         pushToast('success', `已执行：${label}`)
         const timer = setTimeout(() => {
           actionTimers.current.delete(id)
@@ -193,10 +222,10 @@ export default function App() {
 
   const runOptimize = useCallback(
     async (action, key, label) => {
-      if (pendingOptimize.current.has(key)) return
+      if (pendingOptimize.current.has(key)) return false
       if (status === 'offline') {
         pushToast('error', '连接已断开，无法执行优化')
-        return
+        return false
       }
 
       pendingOptimize.current.add(key)
@@ -221,7 +250,7 @@ export default function App() {
         })
         const data = await res.json().catch(() => ({}))
         if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（${res.status}）`)
-        if (!aliveRef.current) return
+        if (!aliveRef.current) return false
 
         setOptimizeStates((prev) => ({ ...prev, [key]: { state: 'ok', result: data } }))
         const freed = Number(data.freed)
@@ -241,16 +270,341 @@ export default function App() {
           })
         }, 2000)
         optimizeTimers.current.set(key, timer)
+        return true
       } catch (err) {
-        if (!aliveRef.current) return
+        if (!aliveRef.current) return false
         const message =
           err.name === 'AbortError' ? '优化请求超时，请检查电脑端是否仍在运行' : err.message || '优化失败'
         setOptimizeStates((prev) => ({ ...prev, [key]: { state: 'error', message } }))
         pushToast('error', message)
+        return false
       } finally {
         clearTimeout(timeout)
         controllers.current.delete(controller)
         pendingOptimize.current.delete(key)
+      }
+    },
+    [pushToast, status, token]
+  )
+
+  const runFan = useCallback(
+    async (percent) => {
+      if (fanBusyRef.current) return
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法控制风扇')
+        return
+      }
+
+      fanBusyRef.current = true
+      setFanState({ state: 'pending', percent, error: '' })
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 9000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/fan/set${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ percent }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（${res.status}）`)
+        if (!aliveRef.current) return
+        setFanState({ state: 'ok', percent: data.percent ?? null, error: '' })
+        pushToast(
+          'success',
+          data.percent == null ? '风扇已恢复自动控制' : `风扇已设为 ${data.percent}%`
+        )
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError'
+            ? '风扇控制超时，请检查 LibreHardwareMonitor 是否在运行'
+            : err.message === 'unauthorized'
+              ? '访问口令无效，请在设置页复制访问链接后重新打开面板'
+              : err.message || '风扇控制失败'
+        setFanState({ state: 'error', percent, error: message })
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+        fanBusyRef.current = false
+      }
+    },
+    [pushToast, status, token]
+  )
+
+  const runAgent = useCallback(
+    async (prompt) => {
+      if (agentBusyRef.current) return
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法使用 AI 助手')
+        return
+      }
+
+      agentBusyRef.current = true
+      setAgentState({ state: 'loading', result: null, error: '' })
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 35000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/agent/analyze${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（${res.status}）`)
+        if (!aliveRef.current) return
+
+        const executed = Array.isArray(data.executed) ? data.executed : []
+        setAgentState({
+          state: 'ok',
+          result: data,
+          error: '',
+          executed,
+        })
+
+        for (const item of executed) {
+          if (!aliveRef.current) break
+          if (item.ok) pushToast('success', `${item.label}已执行`)
+          else pushToast('error', `${item.label}执行失败：${item.error}`)
+        }
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError' ? 'AI 分析超时，请检查网关是否可用' : err.message || 'AI 分析失败'
+        setAgentState({ state: 'error', result: null, error: message })
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+        agentBusyRef.current = false
+      }
+    },
+    [pushToast, status, token]
+  )
+
+  const resetAgent = useCallback(() => {
+    setAgentState({ state: 'idle', result: null, error: '' })
+  }, [])
+
+  const scanDevPorts = useCallback(
+    async () => {
+      if (devBusyRef.current) return
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法扫描端口')
+        return
+      }
+
+      devBusyRef.current = true
+      setDevState((prev) => ({ ...prev, state: 'pending', error: '' }))
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 25000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/dev/ports${query}`, { signal: controller.signal })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `扫描失败（${res.status}）`)
+        if (!aliveRef.current) return
+        setDevState({ state: 'ok', ports: data.ports || [], error: '', pendingPid: 0 })
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError' ? '端口扫描超时' : err.message || '端口扫描失败'
+        setDevState((prev) => ({ ...prev, state: 'error', error: message }))
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+        devBusyRef.current = false
+      }
+    },
+    [pushToast, status, token]
+  )
+
+  const stopDevPort = useCallback(
+    async (item) => {
+      if (!item?.pid) return
+      setDevState((prev) => ({ ...prev, pendingPid: item.pid, error: '' }))
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 12000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/dev/stop${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pid: item.pid }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `结束失败（${res.status}）`)
+        if (!aliveRef.current) return
+        pushToast('success', `已结束 ${data.name || item.name}（端口 ${data.port || item.port}）`)
+        setDevState((prev) => ({
+          ...prev,
+          ports: prev.ports.filter((port) => port.pid !== item.pid),
+          pendingPid: 0,
+        }))
+        scanDevPorts()
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError' ? '结束进程超时' : err.message || '结束进程失败'
+        setDevState((prev) => ({ ...prev, pendingPid: 0, error: message }))
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+      }
+    },
+    [pushToast, scanDevPorts, token]
+  )
+
+  const clearDevError = useCallback(() => {
+    setDevState((prev) => ({ ...prev, error: '' }))
+  }, [])
+
+  // 断开/连接设备走 PnP 禁用与启用，服务端需要管理员权限
+  const toggleDevice = useCallback(
+    async (item, connect) => {
+      if (!item?.id || pendingDevice) return
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法操作设备')
+        return
+      }
+
+      setPendingDevice(item.id)
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 25000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/devices/toggle${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: item.id, connected: connect }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `操作失败（${res.status}）`)
+        if (!aliveRef.current) return
+        pushToast('success', `${connect ? '已连接' : '已断开'}：${item.name}`)
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message =
+          err.name === 'AbortError'
+            ? '设备操作超时，请确认以管理员身份运行'
+            : err.message || '设备操作失败'
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+        if (aliveRef.current) setPendingDevice('')
+      }
+    },
+    [pendingDevice, pushToast, status, token]
+  )
+
+  // 一键启停：spawn 在服务端，命令与工作目录不下发到前端
+  const controlDevService = useCallback(
+    async (id, verb) => {
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法操作开发服务')
+        return
+      }
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), verb === 'start' ? 12000 : 10000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/dev/proc/${verb}${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `操作失败（${res.status}）`)
+        if (!aliveRef.current) return
+        pushToast('success', verb === 'start' ? '已启动开发服务' : '已停止开发服务')
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message = err.name === 'AbortError' ? '操作超时' : err.message || '操作失败'
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+      }
+    },
+    [pushToast, status, token]
+  )
+
+  const loadServiceLogs = useCallback(
+    async (id) => {
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 8000)
+      try {
+        const query = token ? `&token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/dev/logs?id=${encodeURIComponent(id)}${query}`, {
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) return
+        if (!aliveRef.current) return
+        loadDevLogs(id, data.lines || [])
+      } catch {
+        /* 日志补齐失败不影响实时推送 */
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
+      }
+    },
+    [loadDevLogs, token]
+  )
+
+  // 「电脑」按钮：无论面板开在电脑还是平板上，都在电脑本机唤起浏览器
+  const openDevInComputer = useCallback(
+    async (port) => {
+      if (status === 'offline') {
+        pushToast('error', '连接已断开，无法打开端口')
+        return
+      }
+      const controller = new AbortController()
+      controllers.current.add(controller)
+      const timeout = setTimeout(() => controller.abort(), 12000)
+
+      try {
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/dev/open${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ port }),
+          signal: controller.signal,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.ok) throw new Error(data.error || `打开失败（${res.status}）`)
+        if (!aliveRef.current) return
+        pushToast('success', `已在电脑浏览器打开 ${port} 端口`)
+      } catch (err) {
+        if (!aliveRef.current) return
+        const message = err.name === 'AbortError' ? '打开端口超时' : err.message || '打开端口失败'
+        pushToast('error', message)
+      } finally {
+        clearTimeout(timeout)
+        controllers.current.delete(controller)
       }
     },
     [pushToast, status, token]
@@ -353,14 +707,31 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLOR[theme])
+    if (!themeTouchedRef.current) return
     try {
       localStorage.setItem(THEME_KEY, theme)
+      localStorage.setItem(THEME_MANUAL_KEY, '1')
     } catch {
       /* 隐私模式下忽略写入失败 */
     }
   }, [theme])
 
+  // 未手动切换过主题的设备跟随本机设置页里的默认主题
+  useEffect(() => {
+    const preset = settings?.theme
+    if (preset !== 'light' && preset !== 'dark') return
+    let manual = null
+    try {
+      manual = localStorage.getItem(THEME_MANUAL_KEY)
+    } catch {
+      /* 隐私模式下忽略读取失败 */
+    }
+    if (manual === '1') return
+    setTheme(preset)
+  }, [settings?.theme])
+
   const toggleTheme = useCallback(() => {
+    themeTouchedRef.current = true
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
   }, [])
 
@@ -424,6 +795,19 @@ export default function App() {
   const page = pages[pageIndex]
   const rows = useMemo(() => packRows(page.components), [page])
 
+  // 进入开发视图时自动扫描一次端口，之后由手动刷新控制
+  const devScannedPage = useRef(-1)
+  useEffect(() => {
+    const hasDev = page.components.includes('dev')
+    if (!hasDev) {
+      devScannedPage.current = -1
+      return
+    }
+    if (devScannedPage.current === pageIndex) return
+    devScannedPage.current = pageIndex
+    scanDevPorts()
+  }, [page, pageIndex, scanDevPorts])
+
   useEffect(() => {
     setActivePage((prev) => Math.min(prev, pages.length - 1))
   }, [pages.length])
@@ -434,6 +818,17 @@ export default function App() {
     },
     [pages.length]
   )
+
+  // 自动轮播：在设置页开启后按间隔循环切页
+  useEffect(() => {
+    const seconds = Number(settings?.autoRotate) || 0
+    if (seconds <= 0 || pages.length < 2) return undefined
+    const timer = setInterval(() => {
+      if (document.hidden) return
+      setActivePage((prev) => wrapPage(Math.min(prev, pages.length - 1), 1, pages.length))
+    }, Math.max(5, seconds) * 1000)
+    return () => clearInterval(timer)
+  }, [settings?.autoRotate, pages.length])
 
   // 鼠标拖拽切换（桌面端）
   const onPointerDown = useCallback(
@@ -552,6 +947,16 @@ export default function App() {
         return <Temp key="temp" cpuTemp={metrics?.temp} gpuTemp={metrics?.gpu?.temperature} ready={ready} />
       case 'processes':
         return <Processes key="processes" list={metrics?.processes} ready={ready} />
+      case 'devices':
+        return (
+          <Devices
+            key="devices"
+            devices={metrics?.devices}
+            ready={ready}
+            onToggle={toggleDevice}
+            pending={pendingDevice}
+          />
+        )
       case 'optimize':
         return (
           <Optimize
@@ -578,6 +983,18 @@ export default function App() {
         )
       case 'power':
         return <Power key="power" power={metrics?.power} ready={ready} />
+      case 'sensors':
+        return <Sensors key="sensors" sensors={metrics?.sensors} ready={ready} />
+      case 'fan':
+        return (
+          <Fan
+            key="fan"
+            fan={metrics?.fan}
+            ready={ready}
+            state={fanState}
+            onFanPreset={runFan}
+          />
+        )
       case 'media':
         return (
           <Media
@@ -587,14 +1004,43 @@ export default function App() {
             onCommand={runMedia}
           />
         )
+      case 'agent':
+        return (
+          <Agent
+            key="agent"
+            agent={info?.agent}
+            ready={ready}
+            state={agentState}
+            onAnalyze={runAgent}
+            onReset={resetAgent}
+          />
+        )
       case 'shortcuts':
         return (
           <Shortcuts
             key="shortcuts"
-            actions={actions}
+            actions={displayedActions}
             states={actionStates}
             onAction={runAction}
             onClearError={clearActionError}
+          />
+        )
+      case 'dev':
+        return (
+          <Dev
+            key="dev"
+            state={devState}
+            lanHost={info?.ip || ''}
+            onScan={scanDevPorts}
+            onStop={stopDevPort}
+            onOpenComputer={openDevInComputer}
+            onKillError={clearDevError}
+            services={dev.services}
+            proc={dev.proc}
+            logs={devLogs}
+            onStartService={(id) => controlDevService(id, 'start')}
+            onStopService={(id) => controlDevService(id, 'stop')}
+            onLoadLogs={loadServiceLogs}
           />
         )
       default:
@@ -663,7 +1109,10 @@ export default function App() {
         }}
       >
         {rows.map((row, rowIndex) => (
-          <div className="grid-row" key={`${row[0]?.id || 'row'}-${rowIndex}`}>
+          <div
+            className={`grid-row${row.some((item) => item.id === 'sensors') ? ' grid-row--sensors' : ''}`}
+            key={`${row[0]?.id || 'row'}-${rowIndex}`}
+          >
             {row.map(({ id, span }) => (
               <div className={`grid-cell grid-cell--${id}`} key={id} style={{ flexGrow: span }}>
                 {renderWidget(id)}

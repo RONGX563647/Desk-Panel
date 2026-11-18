@@ -111,3 +111,32 @@ test('熄屏指令失败时返回错误', async () => {
 
   await assert.rejects(() => run({ kind: 'monitor-off', label: '熄屏' }), /熄灭显示器失败/)
 })
+
+test('亮屏动作等待 PowerShell 执行完成', async () => {
+  const spawnFn = fakeExitSpawn()
+  const run = createActionRunner({ spawnFn })
+
+  await run({ kind: 'monitor-on', label: '亮屏' })
+
+  assert.equal(spawnFn.calls.length, 1)
+  assert.equal(spawnFn.calls[0].cmd, 'powershell.exe')
+  assert.ok(spawnFn.calls[0].args.includes('-Command'))
+})
+
+test('亮屏指令失败时返回错误', async () => {
+  const run = createActionRunner({ spawnFn: fakeExitSpawn(1) })
+
+  await assert.rejects(() => run({ kind: 'monitor-on', label: '亮屏' }), /唤醒显示器失败/)
+})
+
+test('睡眠动作以进程启动成功为准', async () => {
+  const spawnFn = fakeSpawn()
+  const run = createActionRunner({ spawnFn })
+
+  await run({ kind: 'sleep', label: '睡眠' })
+
+  assert.equal(spawnFn.calls.length, 1)
+  assert.equal(spawnFn.calls[0].cmd, 'rundll32.exe')
+  assert.deepEqual(spawnFn.calls[0].args, ['powrprof.dll,SetSuspendState', '0,1,0'])
+  assert.equal(spawnFn.calls[0].options.detached, true)
+})
