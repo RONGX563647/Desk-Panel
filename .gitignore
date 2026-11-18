@@ -6,3 +6,11 @@ data/
 Thumbs.db
 .screenshots/
 .trae-html-share-packages/
+
+# 桌面版打包产物（体积大，由 build.ps1 生成）
+desktop/release/
+# HID 调试辅助工具
+desktop/hidtest/
+
+# 调试临时文件
+tmp-*
